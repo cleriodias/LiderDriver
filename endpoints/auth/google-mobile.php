@@ -192,16 +192,7 @@ function render_status_page(string $title, string $message, bool $isError = fals
 }
 
 $requestMethod = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
-$contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
-$requestData = $_GET;
-
-if ($requestMethod === 'POST') {
-    if (str_contains($contentType, 'application/json')) {
-        $requestData = input_json();
-    } else {
-        $requestData = $_POST;
-    }
-}
+$requestData = $requestMethod === 'POST' ? $_POST : $_GET;
 
 $redirectUri = trim((string) ($requestData['redirect_uri'] ?? $_GET['redirect_uri'] ?? ''));
 $defaultRedirectUri = 'liderdriver://oauth-callback';
@@ -375,33 +366,74 @@ $selfPath = './google-mobile.php';
             statusElement.classList.toggle('error', isError);
         }
 
+        function decodeJwtPayload(token) {
+            const parts = String(token || '').split('.');
+
+            if (parts.length < 2) {
+                throw new Error('Token Google invalido.');
+            }
+
+            const payload = parts[1]
+                .replace(/-/g, '+')
+                .replace(/_/g, '/');
+            const padding = payload.length % 4;
+            const normalized = padding ? payload + '='.repeat(4 - padding) : payload;
+            const json = atob(normalized);
+            return JSON.parse(json);
+        }
+
+        function validateGooglePayload(payload) {
+            const nowInSeconds = Math.floor(Date.now() / 1000);
+
+            if (payload.aud !== googleClientId) {
+                throw new Error('A conta Google retornou um token de outro aplicativo.');
+            }
+
+            if (!payload.email) {
+                throw new Error('Nao foi possivel identificar o email da conta Google.');
+            }
+
+            if (!(payload.email_verified === true || payload.email_verified === 'true' || payload.email_verified === '1')) {
+                throw new Error('A conta Google informada nao possui email verificado.');
+            }
+
+            if (payload.exp && Number(payload.exp) < nowInSeconds) {
+                throw new Error('O token Google expirou. Tente novamente.');
+            }
+
+            return payload;
+        }
+
+        function buildSessionPayload(payload) {
+            const email = String(payload.email || '').trim();
+            const displayName = String(payload.name || email).trim() || email;
+            const photoUrl = String(payload.picture || '').trim();
+            const loginAt = new Date().toISOString();
+
+            return {
+                ok: true,
+                token: `${String(payload.sub || email)}|google|${Date.now()}`,
+                identifier: email,
+                email,
+                display_name: displayName,
+                unit_name: '',
+                login_at: loginAt,
+                auth_provider: 'google',
+                photo_url: photoUrl,
+                message: 'Login Google realizado com sucesso.'
+            };
+        }
+
         function handleGoogleCredential(response) {
-            setStatus('Validando sua conta e retornando ao app...');
-            fetch(selfPath, {
-                method: 'POST',
-                headers: {
-                    'Accept': 'text/html',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    redirect_uri: redirectUri,
-                    payload: encodePayload(response.credential)
-                })
-            })
-                .then(async (response) => {
-                    const html = await response.text();
-
-                    if (!response.ok) {
-                        throw new Error(html || 'Falha ao concluir o login Google.');
-                    }
-
-                    document.open();
-                    document.write(html);
-                    document.close();
-                })
-                .catch((error) => {
-                    setStatus(error instanceof Error ? error.message : 'Falha ao concluir o login Google.', true);
-                });
+            try {
+                setStatus('Validando sua conta e retornando ao app...');
+                const payload = validateGooglePayload(decodeJwtPayload(response.credential));
+                const sessionPayload = buildSessionPayload(payload);
+                const targetUrl = `${redirectUri}?session=${encodeURIComponent(JSON.stringify(sessionPayload))}`;
+                window.location.replace(targetUrl);
+            } catch (error) {
+                setStatus(error instanceof Error ? error.message : 'Falha ao concluir o login Google.', true);
+            }
         }
 
         function initializeGoogle() {
