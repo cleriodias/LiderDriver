@@ -163,7 +163,16 @@ function render_status_page(string $title, string $message, bool $isError = fals
 }
 
 $requestMethod = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
-$requestData = $requestMethod === 'POST' ? $_POST : $_GET;
+$contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
+$requestData = $_GET;
+
+if ($requestMethod === 'POST') {
+    if (str_contains($contentType, 'application/json')) {
+        $requestData = input_json();
+    } else {
+        $requestData = $_POST;
+    }
+}
 
 $redirectUri = trim((string) ($requestData['redirect_uri'] ?? $_GET['redirect_uri'] ?? ''));
 $defaultRedirectUri = 'liderdriver://oauth-callback';
@@ -178,7 +187,7 @@ if (stripos($redirectUri, 'liderdriver://') !== 0) {
     exit;
 }
 
-$idToken = trim((string) ($requestData['google_token'] ?? $requestData['credential'] ?? ''));
+$idToken = trim((string) ($_SERVER['HTTP_X_GOOGLE_TOKEN'] ?? $requestData['google_token'] ?? $requestData['credential'] ?? ''));
 
 if ($idToken !== '') {
     try {
@@ -326,24 +335,31 @@ $selfPath = './google-mobile.php';
 
         function handleGoogleCredential(response) {
             setStatus('Validando sua conta e retornando ao app...');
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = selfPath;
+            fetch(selfPath, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'text/html',
+                    'Content-Type': 'application/json',
+                    'X-Google-Token': response.credential
+                },
+                body: JSON.stringify({
+                    redirect_uri: redirectUri
+                })
+            })
+                .then(async (response) => {
+                    const html = await response.text();
 
-            const redirectField = document.createElement('input');
-            redirectField.type = 'hidden';
-            redirectField.name = 'redirect_uri';
-            redirectField.value = redirectUri;
-            form.appendChild(redirectField);
+                    if (!response.ok) {
+                        throw new Error(html || 'Falha ao concluir o login Google.');
+                    }
 
-            const tokenField = document.createElement('input');
-            tokenField.type = 'hidden';
-            tokenField.name = 'google_token';
-            tokenField.value = response.credential;
-            form.appendChild(tokenField);
-
-            document.body.appendChild(form);
-            form.submit();
+                    document.open();
+                    document.write(html);
+                    document.close();
+                })
+                .catch((error) => {
+                    setStatus(error instanceof Error ? error.message : 'Falha ao concluir o login Google.', true);
+                });
         }
 
         function initializeGoogle() {
