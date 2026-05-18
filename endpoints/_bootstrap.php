@@ -1,0 +1,642 @@
+<?php
+
+declare(strict_types=1);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Headers: Authorization, Content-Type, Accept');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+
+$requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+if ($requestMethod === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
+function json_response(array $payload, int $status = 200): void
+{
+    http_response_code($status);
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+function input_json(): array
+{
+    $raw = file_get_contents('php://input') ?: '';
+    $data = json_decode($raw, true);
+
+    if (is_array($data)) {
+        return $data;
+    }
+
+    if (is_array($_POST) && !empty($_POST)) {
+        return $_POST;
+    }
+
+    return [];
+}
+
+function env_value(string $key, string $default = ''): string
+{
+    $value = getenv($key);
+
+    if ($value === false) {
+        return $default;
+    }
+
+    return trim((string) $value);
+}
+
+function db_config(): array
+{
+    return [
+        'server' => env_value('DB_SERVER', 'tcp:liderdriver.database.windows.net,1433'),
+        'database' => env_value('DB_DATABASE', 'clerioapp'),
+        'username' => env_value('DB_USERNAME', ''),
+        'password' => env_value('DB_PASSWORD', ''),
+        'encrypt' => env_value('DB_ENCRYPT', '1') !== '0',
+        'trust_certificate' => env_value('DB_TRUST_CERTIFICATE', '0') === '1',
+        'timeout' => (int) env_value('DB_LOGIN_TIMEOUT', '30'),
+    ];
+}
+
+function db(): PDO
+{
+    static $pdo = null;
+
+    if ($pdo instanceof PDO) {
+        return $pdo;
+    }
+
+    $config = db_config();
+
+    if ($config['database'] === '' || $config['username'] === '' || $config['password'] === '') {
+        json_response([
+            'ok' => false,
+            'error' => 'Configuracao do banco incompleta. Defina DB_DATABASE, DB_USERNAME e DB_PASSWORD.',
+        ], 500);
+    }
+
+    $dsn = sprintf(
+        'sqlsrv:server=%s;Database=%s;LoginTimeout=%d;Encrypt=%d;TrustServerCertificate=%d',
+        $config['server'],
+        $config['database'],
+        $config['timeout'],
+        $config['encrypt'] ? 1 : 0,
+        $config['trust_certificate'] ? 1 : 0
+    );
+
+    $pdo = new PDO($dsn, $config['username'], $config['password'], [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES => false,
+    ]);
+
+    return $pdo;
+}
+
+function database_health(): array
+{
+    $config = db_config();
+
+    try {
+        $connection = db();
+        $statement = $connection->query('SELECT 1 AS ok');
+        $statement->fetch();
+
+        return [
+            'status' => 'online',
+            'server' => $config['server'],
+            'name' => $config['database'],
+        ];
+    } catch (Throwable $exception) {
+        return [
+            'status' => 'offline',
+            'server' => $config['server'],
+            'name' => $config['database'],
+            'error' => $exception->getMessage(),
+        ];
+    }
+}
+
+function current_environment(): string
+{
+    return env_value('APP_ENV', 'production');
+}
+
+function quote_identifier(string $value): string
+{
+    return '[' . str_replace(']', ']]', $value) . ']';
+}
+
+function table_exists(string $tableName): bool
+{
+    $statement = db()->prepare(
+        'SELECT 1
+         FROM INFORMATION_SCHEMA.TABLES
+         WHERE TABLE_TYPE = :table_type
+           AND TABLE_NAME = :table_name'
+    );
+    $statement->execute([
+        'table_type' => 'BASE TABLE',
+        'table_name' => $tableName,
+    ]);
+
+    return (bool) $statement->fetchColumn();
+}
+
+function find_table_by_suffix(string $suffix): ?string
+{
+    $statement = db()->prepare(
+        'SELECT TOP 1 TABLE_NAME
+         FROM INFORMATION_SCHEMA.TABLES
+         WHERE TABLE_TYPE = :table_type
+           AND TABLE_NAME LIKE :table_name
+         ORDER BY TABLE_NAME ASC'
+    );
+    $statement->execute([
+        'table_type' => 'BASE TABLE',
+        'table_name' => 'tb%_' . $suffix,
+    ]);
+
+    $tableName = $statement->fetchColumn();
+    return is_string($tableName) && $tableName !== '' ? $tableName : null;
+}
+
+function next_tb_sequence(): int
+{
+    $statement = db()->query(
+        "SELECT MAX(TRY_CONVERT(int, SUBSTRING(TABLE_NAME, 3, CHARINDEX('_', TABLE_NAME + '_') - 3))) AS max_seq
+         FROM INFORMATION_SCHEMA.TABLES
+         WHERE TABLE_TYPE = 'BASE TABLE'
+           AND TABLE_NAME LIKE 'tb%\\_%'"
+    );
+
+    $max = (int) ($statement->fetchColumn() ?: 0);
+    return $max + 1;
+}
+
+function services_table_name(): string
+{
+    static $tableName = null;
+
+    if (is_string($tableName) && $tableName !== '') {
+        return $tableName;
+    }
+
+    $existing = find_table_by_suffix('servicos_landing_page');
+
+    if ($existing !== null) {
+        $tableName = $existing;
+        return $tableName;
+    }
+
+    $nextSequence = next_tb_sequence();
+    $candidate = 'tb' . $nextSequence . '_servicos_landing_page';
+    $quotedTable = quote_identifier($candidate);
+    $quotedSlugIndex = quote_identifier('ux_' . $candidate . '_slug');
+    $quotedOrderIndex = quote_identifier('ix_' . $candidate . '_ordem_ativo');
+
+    db()->exec(
+        "CREATE TABLE {$quotedTable} (
+            id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+            slug NVARCHAR(30) NOT NULL,
+            nome NVARCHAR(60) NOT NULL,
+            descricao_curta NVARCHAR(220) NOT NULL,
+            descricao_completa NVARCHAR(MAX) NOT NULL,
+            valor DECIMAL(10,2) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_valor') . " DEFAULT (0),
+            ordem_exibicao INT NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_ordem') . " DEFAULT (0),
+            ativo BIT NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_ativo') . " DEFAULT (1),
+            created_at DATETIME2(0) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_created_at') . " DEFAULT (SYSUTCDATETIME()),
+            updated_at DATETIME2(0) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_updated_at') . " DEFAULT (SYSUTCDATETIME())
+        )"
+    );
+
+    db()->exec("CREATE UNIQUE INDEX {$quotedSlugIndex} ON {$quotedTable} (slug)");
+    db()->exec("CREATE INDEX {$quotedOrderIndex} ON {$quotedTable} (ativo, ordem_exibicao)");
+
+    $tableName = $candidate;
+    seed_services_table($tableName);
+
+    return $tableName;
+}
+
+function seed_services_table(string $tableName): void
+{
+    $countStatement = db()->query('SELECT COUNT(*) FROM ' . quote_identifier($tableName));
+    $count = (int) $countStatement->fetchColumn();
+
+    if ($count > 0) {
+        return;
+    }
+
+    $items = [
+        [
+            'slug' => 'standard',
+            'nome' => 'Standard',
+            'descricao_curta' => 'Mobilidade executiva eficiente para a rotina diaria.',
+            'descricao_completa' => 'Ideal para deslocamentos urbanos, reunioes, agendas profissionais e transferencias com padrao elevado de conforto.',
+            'valor' => 180.00,
+            'ordem_exibicao' => 1,
+            'ativo' => 1,
+        ],
+        [
+            'slug' => 'gold',
+            'nome' => 'Gold',
+            'descricao_curta' => 'Atendimento com mais exclusividade e presenca executiva.',
+            'descricao_completa' => 'Pensado para clientes que buscam apresentacao refinada, recepcao profissional e experiencia superior em compromissos importantes.',
+            'valor' => 280.00,
+            'ordem_exibicao' => 2,
+            'ativo' => 1,
+        ],
+        [
+            'slug' => 'platinum',
+            'nome' => 'Platinum',
+            'descricao_curta' => 'Conforto premium para agendas de alto nivel.',
+            'descricao_completa' => 'Perfeito para executivos, conselheiros e visitantes com necessidade de imagem impecavel, discricao e fluidez em toda a jornada.',
+            'valor' => 390.00,
+            'ordem_exibicao' => 3,
+            'ativo' => 1,
+        ],
+        [
+            'slug' => 'black',
+            'nome' => 'Black',
+            'descricao_curta' => 'A experiencia mais exclusiva do Lider Driver.',
+            'descricao_completa' => 'Plano flagship para atendimento VIP, diretoria, eventos especiais e clientes que exigem o mais alto padrao de transporte executivo.',
+            'valor' => 520.00,
+            'ordem_exibicao' => 4,
+            'ativo' => 1,
+        ],
+    ];
+
+    $statement = db()->prepare(
+        'INSERT INTO ' . quote_identifier($tableName) . ' (
+            slug, nome, descricao_curta, descricao_completa, valor, ordem_exibicao, ativo, created_at, updated_at
+        ) VALUES (
+            :slug, :nome, :descricao_curta, :descricao_completa, :valor, :ordem_exibicao, :ativo, SYSUTCDATETIME(), SYSUTCDATETIME()
+        )'
+    );
+
+    foreach ($items as $item) {
+        $statement->execute($item);
+    }
+}
+
+function fetch_services(): array
+{
+    $tableName = services_table_name();
+    $statement = db()->query(
+        'SELECT
+            id,
+            slug,
+            nome,
+            descricao_curta,
+            descricao_completa,
+            valor,
+            ordem_exibicao,
+            ativo
+         FROM ' . quote_identifier($tableName) . '
+         ORDER BY ordem_exibicao ASC, id ASC'
+    );
+
+    return $statement->fetchAll();
+}
+
+function save_service(array $payload): array
+{
+    $tableName = services_table_name();
+    $allowedSlugs = ['standard', 'gold', 'platinum', 'black'];
+    $slug = strtolower(trim((string) ($payload['slug'] ?? '')));
+    $name = trim((string) ($payload['name'] ?? ''));
+    $shortDescription = trim((string) ($payload['shortDescription'] ?? ''));
+    $fullDescription = trim((string) ($payload['fullDescription'] ?? ''));
+    $priceRaw = str_replace(',', '.', trim((string) ($payload['price'] ?? '0')));
+    $sortOrder = (int) ($payload['sortOrder'] ?? 0);
+    $isActive = !empty($payload['isActive']) ? 1 : 0;
+
+    if (!in_array($slug, $allowedSlugs, true)) {
+        json_response(['ok' => false, 'error' => 'Plano invalido.'], 422);
+    }
+
+    if ($name === '' || $shortDescription === '' || $fullDescription === '') {
+        json_response(['ok' => false, 'error' => 'Preencha nome e descricoes do plano.'], 422);
+    }
+
+    if (!is_numeric($priceRaw)) {
+        json_response(['ok' => false, 'error' => 'Informe um valor valido para o plano.'], 422);
+    }
+
+    if ($sortOrder <= 0) {
+        $sortOrderMap = [
+            'standard' => 1,
+            'gold' => 2,
+            'platinum' => 3,
+            'black' => 4,
+        ];
+        $sortOrder = $sortOrderMap[$slug] ?? 99;
+    }
+
+    $statement = db()->prepare(
+        'MERGE ' . quote_identifier($tableName) . ' AS target
+         USING (
+            SELECT
+                :slug AS slug,
+                :nome AS nome,
+                :descricao_curta AS descricao_curta,
+                :descricao_completa AS descricao_completa,
+                :valor AS valor,
+                :ordem_exibicao AS ordem_exibicao,
+                :ativo AS ativo
+         ) AS source
+         ON target.slug = source.slug
+         WHEN MATCHED THEN UPDATE SET
+            nome = source.nome,
+            descricao_curta = source.descricao_curta,
+            descricao_completa = source.descricao_completa,
+            valor = source.valor,
+            ordem_exibicao = source.ordem_exibicao,
+            ativo = source.ativo,
+            updated_at = SYSUTCDATETIME()
+         WHEN NOT MATCHED THEN
+            INSERT (slug, nome, descricao_curta, descricao_completa, valor, ordem_exibicao, ativo, created_at, updated_at)
+            VALUES (source.slug, source.nome, source.descricao_curta, source.descricao_completa, source.valor, source.ordem_exibicao, source.ativo, SYSUTCDATETIME(), SYSUTCDATETIME());'
+    );
+
+    $statement->execute([
+        'slug' => $slug,
+        'nome' => $name,
+        'descricao_curta' => $shortDescription,
+        'descricao_completa' => $fullDescription,
+        'valor' => number_format((float) $priceRaw, 2, '.', ''),
+        'ordem_exibicao' => $sortOrder,
+        'ativo' => $isActive,
+    ]);
+
+    $fetchStatement = db()->prepare(
+        'SELECT TOP 1
+            id,
+            slug,
+            nome,
+            descricao_curta,
+            descricao_completa,
+            valor,
+            ordem_exibicao,
+            ativo
+         FROM ' . quote_identifier($tableName) . '
+         WHERE slug = :slug'
+    );
+    $fetchStatement->execute(['slug' => $slug]);
+
+    $item = $fetchStatement->fetch();
+
+    if (!$item) {
+        json_response(['ok' => false, 'error' => 'Servico nao localizado apos salvar.'], 500);
+    }
+
+    return $item;
+}
+
+function leads_table_name(): string
+{
+    static $tableName = null;
+
+    if (is_string($tableName) && $tableName !== '') {
+        return $tableName;
+    }
+
+    $existing = find_table_by_suffix('solicitacoes_transporte_executivo');
+
+    if ($existing !== null) {
+        $tableName = $existing;
+        return $tableName;
+    }
+
+    $nextSequence = next_tb_sequence();
+    $candidate = 'tb' . $nextSequence . '_solicitacoes_transporte_executivo';
+    $quotedTable = quote_identifier($candidate);
+    $quotedStatusIndex = quote_identifier('ix_' . $candidate . '_status_data');
+    $quotedPlanIndex = quote_identifier('ix_' . $candidate . '_plano');
+
+    db()->exec(
+        "CREATE TABLE {$quotedTable} (
+            id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+            nome NVARCHAR(120) NOT NULL,
+            telefone NVARCHAR(20) NOT NULL,
+            origem NVARCHAR(255) NOT NULL,
+            destino NVARCHAR(255) NOT NULL,
+            data_viagem DATE NOT NULL,
+            observacoes NVARCHAR(MAX) NULL,
+            plano_slug NVARCHAR(30) NOT NULL,
+            plano_nome NVARCHAR(60) NOT NULL,
+            status_atendimento NVARCHAR(30) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_status') . " DEFAULT ('Novo') ,
+            created_at DATETIME2(0) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_created_at') . " DEFAULT (SYSUTCDATETIME()),
+            updated_at DATETIME2(0) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_updated_at') . " DEFAULT (SYSUTCDATETIME())
+        )"
+    );
+
+    db()->exec("CREATE INDEX {$quotedStatusIndex} ON {$quotedTable} (status_atendimento, data_viagem, created_at)");
+    db()->exec("CREATE INDEX {$quotedPlanIndex} ON {$quotedTable} (plano_slug, created_at)");
+
+    $tableName = $candidate;
+    return $tableName;
+}
+
+function fetch_service_map(): array
+{
+    $services = fetch_services();
+    $map = [];
+
+    foreach ($services as $service) {
+        $map[strtolower((string) ($service['slug'] ?? ''))] = $service;
+    }
+
+    return $map;
+}
+
+function save_lead(array $payload): array
+{
+    $tableName = leads_table_name();
+    $serviceMap = fetch_service_map();
+    $name = trim((string) ($payload['name'] ?? ''));
+    $phone = preg_replace('/\D+/', '', (string) ($payload['phone'] ?? '')) ?? '';
+    $origin = trim((string) ($payload['origin'] ?? ''));
+    $destination = trim((string) ($payload['destination'] ?? ''));
+    $travelDate = trim((string) ($payload['travelDate'] ?? ''));
+    $notes = trim((string) ($payload['notes'] ?? ''));
+    $planSlug = strtolower(trim((string) ($payload['planSlug'] ?? 'standard')));
+
+    if ($name === '' || $phone === '' || $origin === '' || $destination === '' || $travelDate === '') {
+        json_response(['ok' => false, 'error' => 'Preencha nome, telefone, origem, destino e data da viagem.'], 422);
+    }
+
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $travelDate)) {
+        json_response(['ok' => false, 'error' => 'Informe a data da viagem em formato valido.'], 422);
+    }
+
+    if (!isset($serviceMap[$planSlug])) {
+        json_response(['ok' => false, 'error' => 'Plano selecionado nao foi encontrado.'], 422);
+    }
+
+    $service = $serviceMap[$planSlug];
+    $planName = (string) ($service['nome'] ?? 'Plano');
+
+    $statement = db()->prepare(
+        'INSERT INTO ' . quote_identifier($tableName) . ' (
+            nome, telefone, origem, destino, data_viagem, observacoes, plano_slug, plano_nome, status_atendimento, created_at, updated_at
+        ) VALUES (
+            :nome, :telefone, :origem, :destino, :data_viagem, :observacoes, :plano_slug, :plano_nome, :status_atendimento, SYSUTCDATETIME(), SYSUTCDATETIME()
+        )'
+    );
+
+    $statement->execute([
+        'nome' => $name,
+        'telefone' => $phone,
+        'origem' => $origin,
+        'destino' => $destination,
+        'data_viagem' => $travelDate,
+        'observacoes' => $notes !== '' ? $notes : null,
+        'plano_slug' => $planSlug,
+        'plano_nome' => $planName,
+        'status_atendimento' => 'Novo',
+    ]);
+
+    $item = db()->query(
+        'SELECT TOP 1
+            id,
+            nome,
+            telefone,
+            origem,
+            destino,
+            data_viagem,
+            observacoes,
+            plano_slug,
+            plano_nome,
+            status_atendimento,
+            created_at
+         FROM ' . quote_identifier($tableName) . '
+         ORDER BY id DESC'
+    )->fetch();
+
+    if (!$item) {
+        json_response(['ok' => false, 'error' => 'Falha ao localizar a solicitacao criada.'], 500);
+    }
+
+    return $item;
+}
+
+function fetch_leads(): array
+{
+    $tableName = leads_table_name();
+    $status = trim((string) ($_GET['status'] ?? ''));
+    $startDate = trim((string) ($_GET['start_date'] ?? ''));
+    $endDate = trim((string) ($_GET['end_date'] ?? ''));
+    $allowedStatuses = ['Novo', 'Em atendimento', 'Confirmado'];
+    $conditions = [];
+    $params = [];
+
+    if ($status !== '') {
+        if (!in_array($status, $allowedStatuses, true)) {
+            json_response(['ok' => false, 'error' => 'Status de filtro invalido.'], 422);
+        }
+
+        $conditions[] = 'status_atendimento = :status_atendimento';
+        $params['status_atendimento'] = $status;
+    }
+
+    if ($startDate !== '') {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate)) {
+            json_response(['ok' => false, 'error' => 'Data inicial invalida.'], 422);
+        }
+
+        $conditions[] = 'data_viagem >= :start_date';
+        $params['start_date'] = $startDate;
+    }
+
+    if ($endDate !== '') {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $endDate)) {
+            json_response(['ok' => false, 'error' => 'Data final invalida.'], 422);
+        }
+
+        $conditions[] = 'data_viagem <= :end_date';
+        $params['end_date'] = $endDate;
+    }
+
+    $sql = 'SELECT
+            id,
+            nome,
+            telefone,
+            origem,
+            destino,
+            data_viagem,
+            observacoes,
+            plano_slug,
+            plano_nome,
+            status_atendimento,
+            created_at
+         FROM ' . quote_identifier($tableName);
+
+    if ($conditions !== []) {
+        $sql .= ' WHERE ' . implode(' AND ', $conditions);
+    }
+
+    $sql .= ' ORDER BY created_at DESC, id DESC';
+
+    $statement = db()->prepare($sql);
+    $statement->execute($params);
+
+    return $statement->fetchAll();
+}
+
+function update_lead_status(array $payload): array
+{
+    $tableName = leads_table_name();
+    $id = (int) ($payload['id'] ?? 0);
+    $status = trim((string) ($payload['status'] ?? ''));
+    $allowedStatuses = ['Novo', 'Em atendimento', 'Confirmado'];
+
+    if ($id <= 0) {
+        json_response(['ok' => false, 'error' => 'Solicitacao invalida.'], 422);
+    }
+
+    if (!in_array($status, $allowedStatuses, true)) {
+        json_response(['ok' => false, 'error' => 'Status invalido para a solicitacao.'], 422);
+    }
+
+    $statement = db()->prepare(
+        'UPDATE ' . quote_identifier($tableName) . '
+         SET status_atendimento = :status_atendimento,
+             updated_at = SYSUTCDATETIME()
+         WHERE id = :id'
+    );
+    $statement->execute([
+        'status_atendimento' => $status,
+        'id' => $id,
+    ]);
+
+    $fetchStatement = db()->prepare(
+        'SELECT TOP 1
+            id,
+            nome,
+            telefone,
+            origem,
+            destino,
+            data_viagem,
+            observacoes,
+            plano_slug,
+            plano_nome,
+            status_atendimento,
+            created_at
+         FROM ' . quote_identifier($tableName) . '
+         WHERE id = :id'
+    );
+    $fetchStatement->execute(['id' => $id]);
+
+    $item = $fetchStatement->fetch();
+
+    if (!$item) {
+        json_response(['ok' => false, 'error' => 'Solicitacao nao encontrada.'], 404);
+    }
+
+    return $item;
+}
