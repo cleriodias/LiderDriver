@@ -178,7 +178,7 @@ if (stripos($redirectUri, 'liderdriver://') !== 0) {
     exit;
 }
 
-$idToken = trim((string) ($requestData['credential'] ?? ''));
+$idToken = trim((string) ($requestData['google_token'] ?? $requestData['credential'] ?? ''));
 
 if ($idToken !== '') {
     try {
@@ -336,11 +336,11 @@ $selfPath = './google-mobile.php';
             redirectField.value = redirectUri;
             form.appendChild(redirectField);
 
-            const credentialField = document.createElement('input');
-            credentialField.type = 'hidden';
-            credentialField.name = 'credential';
-            credentialField.value = response.credential;
-            form.appendChild(credentialField);
+            const tokenField = document.createElement('input');
+            tokenField.type = 'hidden';
+            tokenField.name = 'google_token';
+            tokenField.value = response.credential;
+            form.appendChild(tokenField);
 
             document.body.appendChild(form);
             form.submit();
