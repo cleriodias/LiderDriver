@@ -23,7 +23,7 @@ $googleClientId = env_value(
     'GOOGLE_CLIENT_ID',
     '955736336306-i0ph791ks9ak4nkbub8hr4tcu19mqj35.apps.googleusercontent.com'
 );
-$loginEndpoint = './login.php';
+$loginEndpoint = './google-exchange.php';
 ?>
 <!DOCTYPE html>
 <html lang="pt-BR">
