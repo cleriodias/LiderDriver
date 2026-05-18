@@ -162,7 +162,10 @@ function render_status_page(string $title, string $message, bool $isError = fals
     exit;
 }
 
-$redirectUri = trim((string) ($_GET['redirect_uri'] ?? ''));
+$requestMethod = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+$requestData = $requestMethod === 'POST' ? $_POST : $_GET;
+
+$redirectUri = trim((string) ($requestData['redirect_uri'] ?? $_GET['redirect_uri'] ?? ''));
 $defaultRedirectUri = 'liderdriver://oauth-callback';
 
 if ($redirectUri === '') {
@@ -175,7 +178,7 @@ if (stripos($redirectUri, 'liderdriver://') !== 0) {
     exit;
 }
 
-$idToken = trim((string) ($_GET['credential'] ?? ''));
+$idToken = trim((string) ($requestData['credential'] ?? ''));
 
 if ($idToken !== '') {
     try {
@@ -323,8 +326,24 @@ $selfPath = './google-mobile.php';
 
         function handleGoogleCredential(response) {
             setStatus('Validando sua conta e retornando ao app...');
-            const targetUrl = `${selfPath}?redirect_uri=${encodeURIComponent(redirectUri)}&credential=${encodeURIComponent(response.credential)}`;
-            window.location.replace(targetUrl);
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = selfPath;
+
+            const redirectField = document.createElement('input');
+            redirectField.type = 'hidden';
+            redirectField.name = 'redirect_uri';
+            redirectField.value = redirectUri;
+            form.appendChild(redirectField);
+
+            const credentialField = document.createElement('input');
+            credentialField.type = 'hidden';
+            credentialField.name = 'credential';
+            credentialField.value = response.credential;
+            form.appendChild(credentialField);
+
+            document.body.appendChild(form);
+            form.submit();
         }
 
         function initializeGoogle() {
