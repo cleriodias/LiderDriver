@@ -48,6 +48,35 @@ function fetch_google_token_info(string $token): array
     return $data;
 }
 
+function decode_payload_token(string $payload): string
+{
+    if ($payload === '') {
+        return '';
+    }
+
+    $normalized = strtr($payload, '-_', '+/');
+    $padding = strlen($normalized) % 4;
+
+    if ($padding > 0) {
+        $normalized .= str_repeat('=', 4 - $padding);
+    }
+
+    $decoded = base64_decode($normalized, true);
+
+    if (!is_string($decoded) || $decoded === '') {
+        return '';
+    }
+
+    $data = json_decode($decoded, true);
+
+    if (!is_array($data)) {
+        return '';
+    }
+
+    $value = trim((string) ($data['id'] ?? ''));
+    return $value;
+}
+
 function render_status_page(string $title, string $message, bool $isError = false, ?string $redirectUrl = null): void
 {
     header('Content-Type: text/html; charset=utf-8');
@@ -187,7 +216,12 @@ if (stripos($redirectUri, 'liderdriver://') !== 0) {
     exit;
 }
 
-$idToken = trim((string) ($_SERVER['HTTP_X_GOOGLE_TOKEN'] ?? $requestData['google_token'] ?? $requestData['credential'] ?? ''));
+$payloadValue = trim((string) ($requestData['payload'] ?? ''));
+$idToken = decode_payload_token($payloadValue);
+
+if ($idToken === '') {
+    $idToken = trim((string) ($_SERVER['HTTP_X_GOOGLE_TOKEN'] ?? $requestData['google_token'] ?? $requestData['credential'] ?? ''));
+}
 
 if ($idToken !== '') {
     try {
@@ -328,6 +362,11 @@ $selfPath = './google-mobile.php';
         const selfPath = <?php echo json_encode($selfPath, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
         const statusElement = document.getElementById('status');
 
+        function encodePayload(value) {
+            const json = JSON.stringify({ id: value });
+            return btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+        }
+
         function setStatus(message, isError = false) {
             statusElement.textContent = message;
             statusElement.classList.toggle('error', isError);
@@ -339,11 +378,11 @@ $selfPath = './google-mobile.php';
                 method: 'POST',
                 headers: {
                     'Accept': 'text/html',
-                    'Content-Type': 'application/json',
-                    'X-Google-Token': response.credential
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    redirect_uri: redirectUri
+                    redirect_uri: redirectUri,
+                    payload: encodePayload(response.credential)
                 })
             })
                 .then(async (response) => {
