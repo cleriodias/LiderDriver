@@ -25,7 +25,11 @@ CONSULTA NO BANCO DE DADOS:
 ## Conexao com banco de dados de produçao
 - PHP Data Objects(PDO) Sample Code:
 try {
-    $conn = new PDO("sqlsrv:server = tcp:liderdriver.database.windows.net,1433; Database = clerioapp", "liderdriver", "6yh^YH7uj8ik");
+    $conn = new PDO(
+        "sqlsrv:server = tcp:liderdriver.database.windows.net,1433; Database = clerioapp",
+        getenv("LIDERDRIVER_DB_USER"),
+        getenv("LIDERDRIVER_DB_PASS")
+    );
     $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 }
 catch (PDOException $e) {
@@ -34,10 +38,27 @@ catch (PDOException $e) {
 }
 
 - SQL Server Extension Sample Code:
-$connectionInfo = array("UID" => "liderdriver", "pwd" => "6yh^YH7uj8ik", "Database" => "clerioapp", "LoginTimeout" => 30, "Encrypt" => 1, "TrustServerCertificate" => 0);
+$connectionInfo = array(
+    "UID" => getenv("LIDERDRIVER_DB_USER"),
+    "pwd" => getenv("LIDERDRIVER_DB_PASS"),
+    "Database" => "clerioapp",
+    "LoginTimeout" => 30,
+    "Encrypt" => 1,
+    "TrustServerCertificate" => 0
+);
 $serverName = "tcp:liderdriver.database.windows.net,1433";
 $conn = sqlsrv_connect($serverName, $connectionInfo);
 
 
 ## Conexao com banco local
 Server=(localdb)\MSSQLLocalDB;Database=app_dev;Integrated Security=true;Encrypt=false;TrustServerCertificate=true;
+
+## Google
+ID do cliente
+955736336306-0rovunqpcs0er6o1dog9360mh57tbcv4.apps.googleusercontent.com
+
+Chave secreta do cliente
+definir-em-configuracao-segura-local
+
+JSON
+{"web":{"client_id":"955736336306-0rovunqpcs0er6o1dog9360mh57tbcv4.apps.googleusercontent.com","project_id":"aguiasdelivery","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_secret":"definir-em-configuracao-segura-local","javascript_origins":["https://liderdriver.azurewebsites.net"]}}

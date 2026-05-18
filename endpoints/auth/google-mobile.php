@@ -8,7 +8,7 @@ function google_client_id(): string
 {
     return env_value(
         'GOOGLE_CLIENT_ID',
-        '955736336306-i0ph791ks9ak4nkbub8hr4tcu19mqj35.apps.googleusercontent.com'
+        '955736336306-0rovunqpcs0er6o1dog9360mh57tbcv4.apps.googleusercontent.com'
     );
 }
 
