@@ -53,8 +53,8 @@ function db_config(): array
     return [
         'server' => env_value('DB_SERVER', 'tcp:liderdriver.database.windows.net,1433'),
         'database' => env_value('DB_DATABASE', 'clerioapp'),
-        'username' => env_value('DB_USERNAME', ''),
-        'password' => env_value('DB_PASSWORD', ''),
+        'username' => env_value('DB_USERNAME', env_value('LIDERDRIVER_DB_USER', '')),
+        'password' => env_value('DB_PASSWORD', env_value('LIDERDRIVER_DB_PASS', '')),
         'encrypt' => env_value('DB_ENCRYPT', '1') !== '0',
         'trust_certificate' => env_value('DB_TRUST_CERTIFICATE', '0') === '1',
         'timeout' => (int) env_value('DB_LOGIN_TIMEOUT', '30'),
@@ -185,7 +185,7 @@ function services_table_name(): string
         return $tableName;
     }
 
-    $existing = find_table_by_suffix('servicos_landing_page');
+    $existing = find_table_by_suffix('planos_transporte_executivo');
 
     if ($existing !== null) {
         $tableName = $existing;
@@ -193,19 +193,25 @@ function services_table_name(): string
     }
 
     $nextSequence = next_tb_sequence();
-    $candidate = 'tb' . $nextSequence . '_servicos_landing_page';
+    $candidate = 'tb' . $nextSequence . '_planos_transporte_executivo';
     $quotedTable = quote_identifier($candidate);
     $quotedSlugIndex = quote_identifier('ux_' . $candidate . '_slug');
     $quotedOrderIndex = quote_identifier('ix_' . $candidate . '_ordem_ativo');
+    $quotedCityIndex = quote_identifier('ix_' . $candidate . '_cidade_ativo');
 
     db()->exec(
         "CREATE TABLE {$quotedTable} (
             id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-            slug NVARCHAR(30) NOT NULL,
-            nome NVARCHAR(60) NOT NULL,
+            slug NVARCHAR(60) NOT NULL,
+            nome NVARCHAR(80) NOT NULL,
+            cidade NVARCHAR(120) NOT NULL,
             descricao_curta NVARCHAR(220) NOT NULL,
             descricao_completa NVARCHAR(MAX) NOT NULL,
-            valor DECIMAL(10,2) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_valor') . " DEFAULT (0),
+            valor_diaria DECIMAL(10,2) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_valor_diaria') . " DEFAULT (0),
+            horas_disponiveis INT NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_horas_disponiveis') . " DEFAULT (0),
+            limite_km INT NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_limite_km') . " DEFAULT (0),
+            valor_hora_extra DECIMAL(10,2) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_valor_hora_extra') . " DEFAULT (0),
+            valor_km_adicional DECIMAL(10,2) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_valor_km_adicional') . " DEFAULT (0),
             ordem_exibicao INT NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_ordem') . " DEFAULT (0),
             ativo BIT NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_ativo') . " DEFAULT (1),
             created_at DATETIME2(0) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_created_at') . " DEFAULT (SYSUTCDATETIME()),
@@ -215,6 +221,7 @@ function services_table_name(): string
 
     db()->exec("CREATE UNIQUE INDEX {$quotedSlugIndex} ON {$quotedTable} (slug)");
     db()->exec("CREATE INDEX {$quotedOrderIndex} ON {$quotedTable} (ativo, ordem_exibicao)");
+    db()->exec("CREATE INDEX {$quotedCityIndex} ON {$quotedTable} (cidade, ativo, ordem_exibicao)");
 
     $tableName = $candidate;
     seed_services_table($tableName);
@@ -233,48 +240,26 @@ function seed_services_table(string $tableName): void
 
     $items = [
         [
-            'slug' => 'standard',
-            'nome' => 'Standard',
-            'descricao_curta' => 'Mobilidade executiva eficiente para a rotina diaria.',
-            'descricao_completa' => 'Ideal para deslocamentos urbanos, reunioes, agendas profissionais e transferencias com padrao elevado de conforto.',
-            'valor' => 180.00,
-            'ordem_exibicao' => 1,
-            'ativo' => 1,
-        ],
-        [
             'slug' => 'gold',
-            'nome' => 'Gold',
-            'descricao_curta' => 'Atendimento com mais exclusividade e presenca executiva.',
-            'descricao_completa' => 'Pensado para clientes que buscam apresentacao refinada, recepcao profissional e experiencia superior em compromissos importantes.',
-            'valor' => 280.00,
-            'ordem_exibicao' => 2,
-            'ativo' => 1,
-        ],
-        [
-            'slug' => 'platinum',
-            'nome' => 'Platinum',
-            'descricao_curta' => 'Conforto premium para agendas de alto nivel.',
-            'descricao_completa' => 'Perfeito para executivos, conselheiros e visitantes com necessidade de imagem impecavel, discricao e fluidez em toda a jornada.',
-            'valor' => 390.00,
-            'ordem_exibicao' => 3,
-            'ativo' => 1,
-        ],
-        [
-            'slug' => 'black',
-            'nome' => 'Black',
-            'descricao_curta' => 'A experiencia mais exclusiva do Lider Driver.',
-            'descricao_completa' => 'Plano flagship para atendimento VIP, diretoria, eventos especiais e clientes que exigem o mais alto padrao de transporte executivo.',
-            'valor' => 520.00,
-            'ordem_exibicao' => 4,
+            'nome' => 'Plano Gold',
+            'cidade' => 'Brasilia',
+            'descricao_curta' => 'Diaria executiva com motorista a disposicao para agendas de alto nivel em Brasilia.',
+            'descricao_completa' => 'Plano Gold com 10 horas a disposicao, limite de 120 km, hora extra de R$ 60 e adicional de R$ 4 por km excedente.',
+            'valor_diaria' => 650.00,
+            'horas_disponiveis' => 10,
+            'limite_km' => 120,
+            'valor_hora_extra' => 60.00,
+            'valor_km_adicional' => 4.00,
+            'ordem_exibicao' => 1,
             'ativo' => 1,
         ],
     ];
 
     $statement = db()->prepare(
         'INSERT INTO ' . quote_identifier($tableName) . ' (
-            slug, nome, descricao_curta, descricao_completa, valor, ordem_exibicao, ativo, created_at, updated_at
+            slug, nome, cidade, descricao_curta, descricao_completa, valor_diaria, horas_disponiveis, limite_km, valor_hora_extra, valor_km_adicional, ordem_exibicao, ativo, created_at, updated_at
         ) VALUES (
-            :slug, :nome, :descricao_curta, :descricao_completa, :valor, :ordem_exibicao, :ativo, SYSUTCDATETIME(), SYSUTCDATETIME()
+            :slug, :nome, :cidade, :descricao_curta, :descricao_completa, :valor_diaria, :horas_disponiveis, :limite_km, :valor_hora_extra, :valor_km_adicional, :ordem_exibicao, :ativo, SYSUTCDATETIME(), SYSUTCDATETIME()
         )'
     );
 
@@ -291,9 +276,14 @@ function fetch_services(): array
             id,
             slug,
             nome,
+            cidade,
             descricao_curta,
             descricao_completa,
-            valor,
+            valor_diaria,
+            horas_disponiveis,
+            limite_km,
+            valor_hora_extra,
+            valor_km_adicional,
             ordem_exibicao,
             ativo
          FROM ' . quote_identifier($tableName) . '
@@ -303,38 +293,51 @@ function fetch_services(): array
     return $statement->fetchAll();
 }
 
+function normalize_service_slug(string $value): string
+{
+    $value = strtolower(trim($value));
+    $value = preg_replace('/[^a-z0-9]+/', '-', $value) ?? '';
+    return trim($value, '-');
+}
+
 function save_service(array $payload): array
 {
     $tableName = services_table_name();
-    $allowedSlugs = ['standard', 'gold', 'platinum', 'black'];
-    $slug = strtolower(trim((string) ($payload['slug'] ?? '')));
     $name = trim((string) ($payload['name'] ?? ''));
+    $city = trim((string) ($payload['city'] ?? ''));
+    $slug = normalize_service_slug((string) ($payload['slug'] ?? $name));
     $shortDescription = trim((string) ($payload['shortDescription'] ?? ''));
     $fullDescription = trim((string) ($payload['fullDescription'] ?? ''));
-    $priceRaw = str_replace(',', '.', trim((string) ($payload['price'] ?? '0')));
+    $dailyRateRaw = str_replace(',', '.', trim((string) ($payload['dailyRate'] ?? '0')));
+    $availableHours = (int) ($payload['availableHours'] ?? 0);
+    $kmLimit = (int) ($payload['kmLimit'] ?? 0);
+    $extraHourRateRaw = str_replace(',', '.', trim((string) ($payload['extraHourRate'] ?? '0')));
+    $extraKmRateRaw = str_replace(',', '.', trim((string) ($payload['extraKmRate'] ?? '0')));
     $sortOrder = (int) ($payload['sortOrder'] ?? 0);
     $isActive = !empty($payload['isActive']) ? 1 : 0;
 
-    if (!in_array($slug, $allowedSlugs, true)) {
-        json_response(['ok' => false, 'error' => 'Plano invalido.'], 422);
+    if ($slug === '') {
+        $slug = normalize_service_slug($name);
     }
 
-    if ($name === '' || $shortDescription === '' || $fullDescription === '') {
-        json_response(['ok' => false, 'error' => 'Preencha nome e descricoes do plano.'], 422);
+    if ($slug === '') {
+        json_response(['ok' => false, 'error' => 'Informe um nome valido para gerar o identificador do plano.'], 422);
     }
 
-    if (!is_numeric($priceRaw)) {
-        json_response(['ok' => false, 'error' => 'Informe um valor valido para o plano.'], 422);
+    if ($name === '' || $city === '' || $shortDescription === '' || $fullDescription === '') {
+        json_response(['ok' => false, 'error' => 'Preencha nome, cidade e descricoes do plano.'], 422);
+    }
+
+    if (!is_numeric($dailyRateRaw) || !is_numeric($extraHourRateRaw) || !is_numeric($extraKmRateRaw)) {
+        json_response(['ok' => false, 'error' => 'Informe valores validos para diaria e adicionais do plano.'], 422);
+    }
+
+    if ($availableHours <= 0 || $kmLimit <= 0) {
+        json_response(['ok' => false, 'error' => 'Informe horas disponiveis e limite de km maiores que zero.'], 422);
     }
 
     if ($sortOrder <= 0) {
-        $sortOrderMap = [
-            'standard' => 1,
-            'gold' => 2,
-            'platinum' => 3,
-            'black' => 4,
-        ];
-        $sortOrder = $sortOrderMap[$slug] ?? 99;
+        $sortOrder = 1;
     }
 
     $statement = db()->prepare(
@@ -343,32 +346,47 @@ function save_service(array $payload): array
             SELECT
                 :slug AS slug,
                 :nome AS nome,
+                :cidade AS cidade,
                 :descricao_curta AS descricao_curta,
                 :descricao_completa AS descricao_completa,
-                :valor AS valor,
+                :valor_diaria AS valor_diaria,
+                :horas_disponiveis AS horas_disponiveis,
+                :limite_km AS limite_km,
+                :valor_hora_extra AS valor_hora_extra,
+                :valor_km_adicional AS valor_km_adicional,
                 :ordem_exibicao AS ordem_exibicao,
                 :ativo AS ativo
          ) AS source
          ON target.slug = source.slug
          WHEN MATCHED THEN UPDATE SET
             nome = source.nome,
+            cidade = source.cidade,
             descricao_curta = source.descricao_curta,
             descricao_completa = source.descricao_completa,
-            valor = source.valor,
+            valor_diaria = source.valor_diaria,
+            horas_disponiveis = source.horas_disponiveis,
+            limite_km = source.limite_km,
+            valor_hora_extra = source.valor_hora_extra,
+            valor_km_adicional = source.valor_km_adicional,
             ordem_exibicao = source.ordem_exibicao,
             ativo = source.ativo,
             updated_at = SYSUTCDATETIME()
          WHEN NOT MATCHED THEN
-            INSERT (slug, nome, descricao_curta, descricao_completa, valor, ordem_exibicao, ativo, created_at, updated_at)
-            VALUES (source.slug, source.nome, source.descricao_curta, source.descricao_completa, source.valor, source.ordem_exibicao, source.ativo, SYSUTCDATETIME(), SYSUTCDATETIME());'
+            INSERT (slug, nome, cidade, descricao_curta, descricao_completa, valor_diaria, horas_disponiveis, limite_km, valor_hora_extra, valor_km_adicional, ordem_exibicao, ativo, created_at, updated_at)
+            VALUES (source.slug, source.nome, source.cidade, source.descricao_curta, source.descricao_completa, source.valor_diaria, source.horas_disponiveis, source.limite_km, source.valor_hora_extra, source.valor_km_adicional, source.ordem_exibicao, source.ativo, SYSUTCDATETIME(), SYSUTCDATETIME());'
     );
 
     $statement->execute([
         'slug' => $slug,
         'nome' => $name,
+        'cidade' => $city,
         'descricao_curta' => $shortDescription,
         'descricao_completa' => $fullDescription,
-        'valor' => number_format((float) $priceRaw, 2, '.', ''),
+        'valor_diaria' => number_format((float) $dailyRateRaw, 2, '.', ''),
+        'horas_disponiveis' => $availableHours,
+        'limite_km' => $kmLimit,
+        'valor_hora_extra' => number_format((float) $extraHourRateRaw, 2, '.', ''),
+        'valor_km_adicional' => number_format((float) $extraKmRateRaw, 2, '.', ''),
         'ordem_exibicao' => $sortOrder,
         'ativo' => $isActive,
     ]);
@@ -378,9 +396,14 @@ function save_service(array $payload): array
             id,
             slug,
             nome,
+            cidade,
             descricao_curta,
             descricao_completa,
-            valor,
+            valor_diaria,
+            horas_disponiveis,
+            limite_km,
+            valor_hora_extra,
+            valor_km_adicional,
             ordem_exibicao,
             ativo
          FROM ' . quote_identifier($tableName) . '
@@ -391,7 +414,7 @@ function save_service(array $payload): array
     $item = $fetchStatement->fetch();
 
     if (!$item) {
-        json_response(['ok' => false, 'error' => 'Servico nao localizado apos salvar.'], 500);
+        json_response(['ok' => false, 'error' => 'Plano nao localizado apos salvar.'], 500);
     }
 
     return $item;

@@ -22,9 +22,14 @@ function map_gateway_service_item(array $item): array
         'id' => (int) ($item['id'] ?? 0),
         'slug' => (string) ($item['slug'] ?? ''),
         'name' => (string) ($item['nome'] ?? ''),
+        'city' => (string) ($item['cidade'] ?? ''),
         'short_description' => (string) ($item['descricao_curta'] ?? ''),
         'full_description' => (string) ($item['descricao_completa'] ?? ''),
-        'price' => (float) ($item['valor'] ?? 0),
+        'daily_rate' => (float) ($item['valor_diaria'] ?? 0),
+        'available_hours' => (int) ($item['horas_disponiveis'] ?? 0),
+        'km_limit' => (int) ($item['limite_km'] ?? 0),
+        'extra_hour_rate' => (float) ($item['valor_hora_extra'] ?? 0),
+        'extra_km_rate' => (float) ($item['valor_km_adicional'] ?? 0),
         'sort_order' => (int) ($item['ordem_exibicao'] ?? 0),
         'is_active' => (bool) ($item['ativo'] ?? false),
     ];
@@ -66,16 +71,16 @@ function dispatch_public_gateway_request(array $payload): void
                 'modules' => [
                     [
                         'slug' => 'landing-page',
-                        'title' => 'Landing Page executiva',
-                        'description' => 'Pagina comercial abastecida pelo cadastro dos planos Standard, Gold, Platinum e Black.',
-                        'status_label' => 'Estrutura pronta',
+                        'title' => 'Landing Page executiva Brasilia',
+                        'description' => 'Pagina comercial branco, preto e dourado abastecida pelo cadastro do plano executivo.',
+                        'status_label' => 'Plano Gold online',
                         'reference_date' => $today,
                     ],
                     [
                         'slug' => 'cadastro-servicos',
-                        'title' => 'Cadastro de servicos',
-                        'description' => 'Area administrativa para editar valores e descricoes dos planos de transporte executivo.',
-                        'status_label' => 'Em andamento',
+                        'title' => 'Cadastro de planos',
+                        'description' => 'Area administrativa para editar diaria, horas, km e adicionais do transporte executivo.',
+                        'status_label' => 'Estrutura pronta',
                         'reference_date' => $today,
                     ],
                     [

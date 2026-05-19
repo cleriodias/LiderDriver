@@ -1,0 +1,13 @@
+{
+  "location": "Brazil South",
+  "kind": "app,linux",
+  "properties": {
+    "serverFarmId": "/subscriptions/51242591-9d16-401e-91da-fd5b6083c135/resourceGroups/rg-pec-rodrigo/providers/Microsoft.Web/serverfarms/sp-rodrigo-pec",
+    "reserved": true,
+    "httpsOnly": true,
+    "siteConfig": {
+      "linuxFxVersion": "PHP|8.2",
+      "alwaysOn": true
+    }
+  }
+}
