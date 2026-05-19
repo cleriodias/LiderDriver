@@ -93,6 +93,45 @@ function decode_gateway_request(string $payload): array
     return is_array($data) ? $data : [];
 }
 
+function is_allowed_redirect_uri(string $redirectUri): bool
+{
+    if (stripos($redirectUri, 'liderdriver://') === 0) {
+        return true;
+    }
+
+    if (!preg_match('/^https?:\/\//i', $redirectUri)) {
+        return false;
+    }
+
+    $parts = parse_url($redirectUri);
+
+    if (!is_array($parts)) {
+        return false;
+    }
+
+    $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+    $host = strtolower((string) ($parts['host'] ?? ''));
+    $path = (string) ($parts['path'] ?? '');
+
+    if ($scheme === 'https' && $host === 'liderdriver.azurewebsites.net' && in_array($path, ['/login', '/login/'], true)) {
+        return true;
+    }
+
+    if ($scheme === 'http' && in_array($host, ['localhost', '127.0.0.1'], true)) {
+        return true;
+    }
+
+    return false;
+}
+
+function append_session_to_redirect_uri(string $redirectUri, array $sessionPayload): string
+{
+    $separator = strpos($redirectUri, '?') === false ? '?' : '&';
+    $encodedSession = rawurlencode((string) json_encode($sessionPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
+    return $redirectUri . $separator . 'session=' . $encodedSession;
+}
+
 function map_service_item(array $item): array
 {
     return [
@@ -362,7 +401,7 @@ if ($redirectUri === '') {
     $redirectUri = $defaultRedirectUri;
 }
 
-if (stripos($redirectUri, 'liderdriver://') !== 0) {
+if (!is_allowed_redirect_uri($redirectUri)) {
     http_response_code(400);
     echo 'Redirect URI invalida.';
     exit;
@@ -405,7 +444,7 @@ if ($idToken !== '') {
             'message' => 'Login Google realizado com sucesso.',
         ];
 
-        $targetUrl = $redirectUri . '?session=' . rawurlencode((string) json_encode($sessionPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $targetUrl = append_session_to_redirect_uri($redirectUri, $sessionPayload);
         render_status_page('Retornando ao app', 'Login concluido. Voce sera redirecionado automaticamente para o Lider Driver.', false, $targetUrl);
     } catch (Throwable $exception) {
         render_status_page('Falha no login Google', $exception->getMessage(), true);
@@ -587,7 +626,8 @@ $selfPath = './google-mobile.php';
                 setStatus('Validando sua conta e retornando ao app...');
                 const payload = validateGooglePayload(decodeJwtPayload(response.credential));
                 const sessionPayload = buildSessionPayload(payload);
-                const targetUrl = `${redirectUri}?session=${encodeURIComponent(JSON.stringify(sessionPayload))}`;
+                const separator = redirectUri.includes('?') ? '&' : '?';
+                const targetUrl = `${redirectUri}${separator}session=${encodeURIComponent(JSON.stringify(sessionPayload))}`;
                 window.location.replace(targetUrl);
             } catch (error) {
                 setStatus(error instanceof Error ? error.message : 'Falha ao concluir o login Google.', true);

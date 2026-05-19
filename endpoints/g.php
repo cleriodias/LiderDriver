@@ -16,6 +16,53 @@ function decode_gateway_request_payload(string $payload): array
     return is_array($data) ? $data : [];
 }
 
+function request_param(string $key, string $default = ''): string
+{
+    if (isset($_POST[$key])) {
+        return trim((string) $_POST[$key]);
+    }
+
+    if (isset($_GET[$key])) {
+        return trim((string) $_GET[$key]);
+    }
+
+    return $default;
+}
+
+function decode_simple_gateway_payload(): array
+{
+    $action = strtolower(request_param('a'));
+
+    if ($action === '') {
+        return [];
+    }
+
+    $data = [];
+
+    foreach ($_POST as $key => $value) {
+        if ($key === 'a' || $key === 'q') {
+            continue;
+        }
+
+        $data[(string) $key] = $value;
+    }
+
+    foreach ($_GET as $key => $value) {
+        if ($key === 'a' || $key === 'q') {
+            continue;
+        }
+
+        if (!array_key_exists((string) $key, $data)) {
+            $data[(string) $key] = $value;
+        }
+    }
+
+    return [
+        'a' => $action,
+        'd' => $data,
+    ];
+}
+
 function map_gateway_service_item(array $item): array
 {
     return [
@@ -152,6 +199,10 @@ function dispatch_public_gateway_request(array $payload): void
 }
 
 $payload = decode_gateway_request_payload((string) ($_POST['q'] ?? ''));
+
+if ($payload === []) {
+    $payload = decode_simple_gateway_payload();
+}
 
 if ($payload === []) {
     json_response([

@@ -51,10 +51,19 @@ function env_value(string $key, string $default = ''): string
 function db_config(): array
 {
     return [
-        'server' => env_value('DB_SERVER', 'tcp:liderdriver.database.windows.net,1433'),
-        'database' => env_value('DB_DATABASE', 'clerioapp'),
-        'username' => env_value('DB_USERNAME', env_value('LIDERDRIVER_DB_USER', '')),
-        'password' => env_value('DB_PASSWORD', env_value('LIDERDRIVER_DB_PASS', '')),
+        'server' => env_value(
+            'DB_SERVER',
+            env_value('AZURE_SQL_SERVERNAME', 'tcp:liderdriver.database.windows.net,1433')
+        ),
+        'database' => env_value('DB_DATABASE', env_value('AZURE_SQL_DATABASE', 'clerioapp')),
+        'username' => env_value(
+            'DB_USERNAME',
+            env_value('LIDERDRIVER_DB_USER', env_value('AZURE_SQL_UID', ''))
+        ),
+        'password' => env_value(
+            'DB_PASSWORD',
+            env_value('LIDERDRIVER_DB_PASS', env_value('AZURE_SQL_PWD', ''))
+        ),
         'encrypt' => env_value('DB_ENCRYPT', '1') !== '0',
         'trust_certificate' => env_value('DB_TRUST_CERTIFICATE', '0') === '1',
         'timeout' => (int) env_value('DB_LOGIN_TIMEOUT', '30'),
