@@ -119,14 +119,14 @@ function dispatch_public_gateway_request(array $payload): void
                     [
                         'slug' => 'landing-page',
                         'title' => 'Landing Page executiva Brasilia',
-                        'description' => 'Pagina comercial branco, preto e dourado abastecida pelo cadastro do plano executivo.',
-                        'status_label' => 'Plano Gold online',
+                        'description' => 'Pagina comercial branco, preto e dourado abastecida pelo cadastro de planos executivos.',
+                        'status_label' => 'Planos online',
                         'reference_date' => $today,
                     ],
                     [
                         'slug' => 'cadastro-servicos',
                         'title' => 'Cadastro de planos',
-                        'description' => 'Area administrativa para editar diaria, horas, km e adicionais do transporte executivo.',
+                        'description' => 'Area administrativa para criar e editar diaria, horas, km e adicionais do transporte executivo.',
                         'status_label' => 'Estrutura pronta',
                         'reference_date' => $today,
                     ],

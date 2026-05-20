@@ -312,9 +312,10 @@ function normalize_service_slug(string $value): string
 function save_service(array $payload): array
 {
     $tableName = services_table_name();
+    $id = (int) ($payload['id'] ?? 0);
     $name = trim((string) ($payload['name'] ?? ''));
     $city = trim((string) ($payload['city'] ?? ''));
-    $slug = normalize_service_slug((string) ($payload['slug'] ?? $name));
+    $requestedSlug = trim((string) ($payload['slug'] ?? ''));
     $shortDescription = trim((string) ($payload['shortDescription'] ?? ''));
     $fullDescription = trim((string) ($payload['fullDescription'] ?? ''));
     $dailyRateRaw = str_replace(',', '.', trim((string) ($payload['dailyRate'] ?? '0')));
@@ -324,10 +325,7 @@ function save_service(array $payload): array
     $extraKmRateRaw = str_replace(',', '.', trim((string) ($payload['extraKmRate'] ?? '0')));
     $sortOrder = (int) ($payload['sortOrder'] ?? 0);
     $isActive = !empty($payload['isActive']) ? 1 : 0;
-
-    if ($slug === '') {
-        $slug = normalize_service_slug($name);
-    }
+    $slug = normalize_service_slug($requestedSlug !== '' ? $requestedSlug : $name);
 
     if ($slug === '') {
         json_response(['ok' => false, 'error' => 'Informe um nome valido para gerar o identificador do plano.'], 422);
@@ -346,46 +344,13 @@ function save_service(array $payload): array
     }
 
     if ($sortOrder <= 0) {
-        $sortOrder = 1;
+        $maxOrderStatement = db()->query(
+            'SELECT ISNULL(MAX(ordem_exibicao), 0) AS max_ordem FROM ' . quote_identifier($tableName)
+        );
+        $sortOrder = ((int) $maxOrderStatement->fetchColumn()) + 1;
     }
 
-    $statement = db()->prepare(
-        'MERGE ' . quote_identifier($tableName) . ' AS target
-         USING (
-            SELECT
-                :slug AS slug,
-                :nome AS nome,
-                :cidade AS cidade,
-                :descricao_curta AS descricao_curta,
-                :descricao_completa AS descricao_completa,
-                :valor_diaria AS valor_diaria,
-                :horas_disponiveis AS horas_disponiveis,
-                :limite_km AS limite_km,
-                :valor_hora_extra AS valor_hora_extra,
-                :valor_km_adicional AS valor_km_adicional,
-                :ordem_exibicao AS ordem_exibicao,
-                :ativo AS ativo
-         ) AS source
-         ON target.slug = source.slug
-         WHEN MATCHED THEN UPDATE SET
-            nome = source.nome,
-            cidade = source.cidade,
-            descricao_curta = source.descricao_curta,
-            descricao_completa = source.descricao_completa,
-            valor_diaria = source.valor_diaria,
-            horas_disponiveis = source.horas_disponiveis,
-            limite_km = source.limite_km,
-            valor_hora_extra = source.valor_hora_extra,
-            valor_km_adicional = source.valor_km_adicional,
-            ordem_exibicao = source.ordem_exibicao,
-            ativo = source.ativo,
-            updated_at = SYSUTCDATETIME()
-         WHEN NOT MATCHED THEN
-            INSERT (slug, nome, cidade, descricao_curta, descricao_completa, valor_diaria, horas_disponiveis, limite_km, valor_hora_extra, valor_km_adicional, ordem_exibicao, ativo, created_at, updated_at)
-            VALUES (source.slug, source.nome, source.cidade, source.descricao_curta, source.descricao_completa, source.valor_diaria, source.horas_disponiveis, source.limite_km, source.valor_hora_extra, source.valor_km_adicional, source.ordem_exibicao, source.ativo, SYSUTCDATETIME(), SYSUTCDATETIME());'
-    );
-
-    $statement->execute([
+    $parameters = [
         'slug' => $slug,
         'nome' => $name,
         'cidade' => $city,
@@ -398,7 +363,64 @@ function save_service(array $payload): array
         'valor_km_adicional' => number_format((float) $extraKmRateRaw, 2, '.', ''),
         'ordem_exibicao' => $sortOrder,
         'ativo' => $isActive,
+    ];
+
+    $slugConflictStatement = db()->prepare(
+        'SELECT TOP 1 id
+         FROM ' . quote_identifier($tableName) . '
+         WHERE slug = :slug
+           AND (:id <= 0 OR id <> :id)'
+    );
+    $slugConflictStatement->execute([
+        'slug' => $slug,
+        'id' => $id,
     ]);
+
+    if ($slugConflictStatement->fetch()) {
+        json_response(['ok' => false, 'error' => 'Ja existe um plano com esse identificador.'], 422);
+    }
+
+    if ($id > 0) {
+        $existsStatement = db()->prepare(
+            'SELECT TOP 1 id
+             FROM ' . quote_identifier($tableName) . '
+             WHERE id = :id'
+        );
+        $existsStatement->execute(['id' => $id]);
+
+        if (!$existsStatement->fetch()) {
+            json_response(['ok' => false, 'error' => 'Plano nao encontrado para atualizacao.'], 404);
+        }
+
+        $statement = db()->prepare(
+            'UPDATE ' . quote_identifier($tableName) . '
+             SET slug = :slug,
+                 nome = :nome,
+                 cidade = :cidade,
+                 descricao_curta = :descricao_curta,
+                 descricao_completa = :descricao_completa,
+                 valor_diaria = :valor_diaria,
+                 horas_disponiveis = :horas_disponiveis,
+                 limite_km = :limite_km,
+                 valor_hora_extra = :valor_hora_extra,
+                 valor_km_adicional = :valor_km_adicional,
+                 ordem_exibicao = :ordem_exibicao,
+                 ativo = :ativo,
+                 updated_at = SYSUTCDATETIME()
+             WHERE id = :id'
+        );
+        $statement->execute($parameters + ['id' => $id]);
+    } else {
+        $statement = db()->prepare(
+            'INSERT INTO ' . quote_identifier($tableName) . ' (
+                slug, nome, cidade, descricao_curta, descricao_completa, valor_diaria, horas_disponiveis, limite_km, valor_hora_extra, valor_km_adicional, ordem_exibicao, ativo, created_at, updated_at
+            ) VALUES (
+                :slug, :nome, :cidade, :descricao_curta, :descricao_completa, :valor_diaria, :horas_disponiveis, :limite_km, :valor_hora_extra, :valor_km_adicional, :ordem_exibicao, :ativo, SYSUTCDATETIME(), SYSUTCDATETIME()
+            )'
+        );
+        $statement->execute($parameters);
+        $id = (int) db()->lastInsertId();
+    }
 
     $fetchStatement = db()->prepare(
         'SELECT TOP 1
@@ -416,9 +438,9 @@ function save_service(array $payload): array
             ordem_exibicao,
             ativo
          FROM ' . quote_identifier($tableName) . '
-         WHERE slug = :slug'
+         WHERE id = :id'
     );
-    $fetchStatement->execute(['slug' => $slug]);
+    $fetchStatement->execute(['id' => $id]);
 
     $item = $fetchStatement->fetch();
 
