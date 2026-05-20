@@ -91,11 +91,20 @@ function map_gateway_lead_item(array $item): array
         'origin' => (string) ($item['origem'] ?? ''),
         'destination' => (string) ($item['destino'] ?? ''),
         'travel_date' => (string) ($item['data_viagem'] ?? ''),
+        'travel_time' => (string) ($item['hora_inicio'] ?? ''),
         'notes' => (string) ($item['observacoes'] ?? ''),
         'plan_slug' => (string) ($item['plano_slug'] ?? ''),
         'plan_name' => (string) ($item['plano_nome'] ?? ''),
         'status' => (string) ($item['status_atendimento'] ?? 'Novo'),
         'created_at' => isset($item['created_at']) ? (string) $item['created_at'] : '',
+        'requester_email' => (string) ($item['solicitante_email'] ?? ''),
+        'requester_name' => (string) ($item['solicitante_nome'] ?? ''),
+        'requester_auth_provider' => (string) ($item['solicitante_auth_provider'] ?? ''),
+        'driver_email' => (string) ($item['motorista_email'] ?? ''),
+        'driver_name' => (string) ($item['motorista_nome'] ?? ''),
+        'captured_at' => isset($item['capturado_em']) ? (string) $item['capturado_em'] : '',
+        'started_at' => isset($item['iniciado_em']) ? (string) $item['iniciado_em'] : '',
+        'finished_at' => isset($item['finalizado_em']) ? (string) $item['finalizado_em'] : '',
     ];
 }
 
@@ -108,36 +117,14 @@ function dispatch_public_gateway_request(array $payload): void
         case 'dbs':
             $database = database_health();
             $status = $database['status'] === 'online' ? 200 : 500;
-            $today = date('Y-m-d');
 
             json_response([
                 'ok' => $database['status'] === 'online',
                 'environment' => current_environment(),
                 'generated_at' => gmdate('c'),
                 'database' => $database,
-                'modules' => [
-                    [
-                        'slug' => 'landing-page',
-                        'title' => 'Landing Page executiva Brasilia',
-                        'description' => 'Pagina comercial branco, preto e dourado abastecida pelo cadastro de planos executivos.',
-                        'status_label' => 'Planos online',
-                        'reference_date' => $today,
-                    ],
-                    [
-                        'slug' => 'cadastro-servicos',
-                        'title' => 'Cadastro de planos',
-                        'description' => 'Area administrativa para criar e editar diaria, horas, km e adicionais do transporte executivo.',
-                        'status_label' => 'Estrutura pronta',
-                        'reference_date' => $today,
-                    ],
-                    [
-                        'slug' => 'captacao-comercial',
-                        'title' => 'Captacao comercial',
-                        'description' => 'Formulario da landing page gravando solicitacoes de interesse em transporte executivo.',
-                        'status_label' => 'Lead tracking inicial pronto',
-                        'reference_date' => $today,
-                    ],
-                ],
+                'lead_summary' => fetch_lead_status_summary(),
+                'modules' => [],
             ], $status);
 
         case 'svl':
@@ -168,6 +155,14 @@ function dispatch_public_gateway_request(array $payload): void
                 $_GET['end_date'] = (string) $data['endDate'];
             }
 
+            if (isset($data['requesterEmail']) && trim((string) $data['requesterEmail']) !== '') {
+                $_GET['requester_email'] = (string) $data['requesterEmail'];
+            }
+
+            if (isset($data['driverEmail']) && trim((string) $data['driverEmail']) !== '') {
+                $_GET['driver_email'] = (string) $data['driverEmail'];
+            }
+
             try {
                 $items = array_map('map_gateway_lead_item', fetch_leads());
             } finally {
@@ -184,6 +179,12 @@ function dispatch_public_gateway_request(array $payload): void
                 'ok' => true,
                 'item' => map_gateway_lead_item(save_lead($data)),
             ], 201);
+
+        case 'ldt':
+            json_response([
+                'ok' => true,
+                'item' => map_gateway_lead_item(take_lead_for_driver($data)),
+            ]);
 
         case 'ldu':
             json_response([

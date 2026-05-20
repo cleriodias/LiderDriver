@@ -8,7 +8,11 @@ try {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         $payload = input_json();
         $action = trim((string) ($payload['action'] ?? ''));
-        $item = $action === 'update_status' ? update_lead_status($payload) : save_lead($payload);
+        $item = match ($action) {
+            'update_status' => update_lead_status($payload),
+            'take_for_driver' => take_lead_for_driver($payload),
+            default => save_lead($payload),
+        };
 
         json_response([
             'ok' => true,
@@ -19,13 +23,22 @@ try {
                 'origin' => (string) ($item['origem'] ?? ''),
                 'destination' => (string) ($item['destino'] ?? ''),
                 'travel_date' => (string) ($item['data_viagem'] ?? ''),
+                'travel_time' => (string) ($item['hora_inicio'] ?? ''),
                 'notes' => (string) ($item['observacoes'] ?? ''),
                 'plan_slug' => (string) ($item['plano_slug'] ?? ''),
                 'plan_name' => (string) ($item['plano_nome'] ?? ''),
                 'status' => (string) ($item['status_atendimento'] ?? 'Novo'),
                 'created_at' => isset($item['created_at']) ? (string) $item['created_at'] : '',
+                'requester_email' => (string) ($item['solicitante_email'] ?? ''),
+                'requester_name' => (string) ($item['solicitante_nome'] ?? ''),
+                'requester_auth_provider' => (string) ($item['solicitante_auth_provider'] ?? ''),
+                'driver_email' => (string) ($item['motorista_email'] ?? ''),
+                'driver_name' => (string) ($item['motorista_nome'] ?? ''),
+                'captured_at' => isset($item['capturado_em']) ? (string) $item['capturado_em'] : '',
+                'started_at' => isset($item['iniciado_em']) ? (string) $item['iniciado_em'] : '',
+                'finished_at' => isset($item['finalizado_em']) ? (string) $item['finalizado_em'] : '',
             ],
-        ], $action === 'update_status' ? 200 : 201);
+        ], $action === 'update_status' || $action === 'take_for_driver' ? 200 : 201);
     }
 
     $items = array_map(
@@ -36,11 +49,20 @@ try {
             'origin' => (string) ($item['origem'] ?? ''),
             'destination' => (string) ($item['destino'] ?? ''),
             'travel_date' => (string) ($item['data_viagem'] ?? ''),
+            'travel_time' => (string) ($item['hora_inicio'] ?? ''),
             'notes' => (string) ($item['observacoes'] ?? ''),
             'plan_slug' => (string) ($item['plano_slug'] ?? ''),
             'plan_name' => (string) ($item['plano_nome'] ?? ''),
             'status' => (string) ($item['status_atendimento'] ?? 'Novo'),
             'created_at' => isset($item['created_at']) ? (string) $item['created_at'] : '',
+            'requester_email' => (string) ($item['solicitante_email'] ?? ''),
+            'requester_name' => (string) ($item['solicitante_nome'] ?? ''),
+            'requester_auth_provider' => (string) ($item['solicitante_auth_provider'] ?? ''),
+            'driver_email' => (string) ($item['motorista_email'] ?? ''),
+            'driver_name' => (string) ($item['motorista_nome'] ?? ''),
+            'captured_at' => isset($item['capturado_em']) ? (string) $item['capturado_em'] : '',
+            'started_at' => isset($item['iniciado_em']) ? (string) $item['iniciado_em'] : '',
+            'finished_at' => isset($item['finalizado_em']) ? (string) $item['finalizado_em'] : '',
         ],
         fetch_leads()
     );

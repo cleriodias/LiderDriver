@@ -17,7 +17,8 @@ $spaRoutes = @(
     'landing',
     'dashboard',
     'servicos',
-    'solicitacoes'
+    'solicitacoes',
+    'nova-solicitacao'
 )
 
 if (-not (Test-Path -LiteralPath $endpointsDir)) {

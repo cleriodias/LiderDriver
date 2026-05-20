@@ -155,6 +155,38 @@ function table_exists(string $tableName): bool
     return (bool) $statement->fetchColumn();
 }
 
+function column_exists(string $tableName, string $columnName): bool
+{
+    $statement = db()->prepare(
+        'SELECT 1
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_NAME = :table_name
+           AND COLUMN_NAME = :column_name'
+    );
+    $statement->execute([
+        'table_name' => $tableName,
+        'column_name' => $columnName,
+    ]);
+
+    return (bool) $statement->fetchColumn();
+}
+
+function index_exists(string $tableName, string $indexName): bool
+{
+    $statement = db()->prepare(
+        'SELECT 1
+         FROM sys.indexes
+         WHERE object_id = OBJECT_ID(:table_name)
+           AND name = :index_name'
+    );
+    $statement->execute([
+        'table_name' => $tableName,
+        'index_name' => $indexName,
+    ]);
+
+    return (bool) $statement->fetchColumn();
+}
+
 function find_table_by_suffix(string $suffix): ?string
 {
     $statement = db()->prepare(
@@ -463,14 +495,17 @@ function leads_table_name(): string
 
     if ($existing !== null) {
         $tableName = $existing;
+        ensure_leads_table_structure($tableName);
         return $tableName;
     }
 
     $nextSequence = next_tb_sequence();
     $candidate = 'tb' . $nextSequence . '_solicitacoes_transporte_executivo';
     $quotedTable = quote_identifier($candidate);
-    $quotedStatusIndex = quote_identifier('ix_' . $candidate . '_status_data');
+    $quotedStatusIndex = quote_identifier('ix_' . $candidate . '_status_data_hora');
     $quotedPlanIndex = quote_identifier('ix_' . $candidate . '_plano');
+    $quotedRequesterIndex = quote_identifier('ix_' . $candidate . '_solicitante_email_created');
+    $quotedDriverScheduleIndex = quote_identifier('ix_' . $candidate . '_motorista_agenda');
 
     db()->exec(
         "CREATE TABLE {$quotedTable} (
@@ -480,20 +515,99 @@ function leads_table_name(): string
             origem NVARCHAR(255) NOT NULL,
             destino NVARCHAR(255) NOT NULL,
             data_viagem DATE NOT NULL,
+            hora_inicio CHAR(5) NOT NULL,
+            horas_previstas INT NOT NULL,
             observacoes NVARCHAR(MAX) NULL,
             plano_slug NVARCHAR(30) NOT NULL,
             plano_nome NVARCHAR(60) NOT NULL,
+            solicitante_email NVARCHAR(255) NULL,
+            solicitante_nome NVARCHAR(160) NULL,
+            solicitante_auth_provider NVARCHAR(20) NULL,
+            motorista_email NVARCHAR(255) NULL,
+            motorista_nome NVARCHAR(160) NULL,
+            capturado_em DATETIME2(0) NULL,
+            iniciado_em DATETIME2(0) NULL,
+            finalizado_em DATETIME2(0) NULL,
             status_atendimento NVARCHAR(30) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_status') . " DEFAULT ('Novo') ,
             created_at DATETIME2(0) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_created_at') . " DEFAULT (SYSUTCDATETIME()),
             updated_at DATETIME2(0) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_updated_at') . " DEFAULT (SYSUTCDATETIME())
         )"
     );
 
-    db()->exec("CREATE INDEX {$quotedStatusIndex} ON {$quotedTable} (status_atendimento, data_viagem, created_at)");
+    db()->exec("CREATE INDEX {$quotedStatusIndex} ON {$quotedTable} (status_atendimento, data_viagem, hora_inicio, created_at)");
     db()->exec("CREATE INDEX {$quotedPlanIndex} ON {$quotedTable} (plano_slug, created_at)");
+    db()->exec("CREATE INDEX {$quotedRequesterIndex} ON {$quotedTable} (solicitante_email, created_at)");
+    db()->exec("CREATE INDEX {$quotedDriverScheduleIndex} ON {$quotedTable} (motorista_email, data_viagem, hora_inicio, status_atendimento)");
 
     $tableName = $candidate;
+    ensure_leads_table_structure($tableName);
     return $tableName;
+}
+
+function ensure_leads_table_structure(string $tableName): void
+{
+    $quotedTable = quote_identifier($tableName);
+    $requesterIndexName = 'ix_' . $tableName . '_solicitante_email_created';
+    $statusIndexName = 'ix_' . $tableName . '_status_data_hora';
+    $driverScheduleIndexName = 'ix_' . $tableName . '_motorista_agenda';
+
+    if (!column_exists($tableName, 'solicitante_email')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD solicitante_email NVARCHAR(255) NULL');
+    }
+
+    if (!column_exists($tableName, 'solicitante_nome')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD solicitante_nome NVARCHAR(160) NULL');
+    }
+
+    if (!column_exists($tableName, 'solicitante_auth_provider')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD solicitante_auth_provider NVARCHAR(20) NULL');
+    }
+
+    if (!column_exists($tableName, 'hora_inicio')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . " ADD hora_inicio CHAR(5) NOT NULL CONSTRAINT " . quote_identifier('df_' . $tableName . '_hora_inicio') . " DEFAULT ('08:00')");
+    }
+
+    if (!column_exists($tableName, 'horas_previstas')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . " ADD horas_previstas INT NOT NULL CONSTRAINT " . quote_identifier('df_' . $tableName . '_horas_previstas') . ' DEFAULT (1)');
+    }
+
+    if (!column_exists($tableName, 'motorista_email')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD motorista_email NVARCHAR(255) NULL');
+    }
+
+    if (!column_exists($tableName, 'motorista_nome')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD motorista_nome NVARCHAR(160) NULL');
+    }
+
+    if (!column_exists($tableName, 'capturado_em')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD capturado_em DATETIME2(0) NULL');
+    }
+
+    if (!column_exists($tableName, 'iniciado_em')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD iniciado_em DATETIME2(0) NULL');
+    }
+
+    if (!column_exists($tableName, 'finalizado_em')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD finalizado_em DATETIME2(0) NULL');
+    }
+
+    if (!index_exists($tableName, $requesterIndexName)) {
+        db()->exec(
+            'CREATE INDEX ' . quote_identifier($requesterIndexName) . ' ON ' . $quotedTable . ' (solicitante_email, created_at)'
+        );
+    }
+
+    if (!index_exists($tableName, $statusIndexName)) {
+        db()->exec(
+            'CREATE INDEX ' . quote_identifier($statusIndexName) . ' ON ' . $quotedTable . ' (status_atendimento, data_viagem, hora_inicio, created_at)'
+        );
+    }
+
+    if (!index_exists($tableName, $driverScheduleIndexName)) {
+        db()->exec(
+            'CREATE INDEX ' . quote_identifier($driverScheduleIndexName) . ' ON ' . $quotedTable . ' (motorista_email, data_viagem, hora_inicio, status_atendimento)'
+        );
+    }
 }
 
 function fetch_service_map(): array
@@ -508,6 +622,146 @@ function fetch_service_map(): array
     return $map;
 }
 
+function normalize_time_value(string $value): string
+{
+    $trimmed = trim($value);
+
+    if (!preg_match('/^(\d{1,2}):(\d{2})$/', $trimmed, $matches)) {
+        return '';
+    }
+
+    $hour = (int) $matches[1];
+    $minute = (int) $matches[2];
+
+    if ($hour < 0 || $hour > 23 || $minute < 0 || $minute > 59) {
+        return '';
+    }
+
+    return sprintf('%02d:%02d', $hour, $minute);
+}
+
+function lead_select_columns(): string
+{
+    return 'id,
+            nome,
+            telefone,
+            origem,
+            destino,
+            data_viagem,
+            hora_inicio,
+            horas_previstas,
+            observacoes,
+            plano_slug,
+            plano_nome,
+            solicitante_email,
+            solicitante_nome,
+            solicitante_auth_provider,
+            motorista_email,
+            motorista_nome,
+            capturado_em,
+            iniciado_em,
+            finalizado_em,
+            status_atendimento,
+            created_at,
+            updated_at';
+}
+
+function fetch_lead_by_id(string $tableName, int $id): ?array
+{
+    $statement = db()->prepare(
+        'SELECT TOP 1
+            ' . lead_select_columns() . '
+         FROM ' . quote_identifier($tableName) . '
+         WHERE id = :id'
+    );
+    $statement->execute(['id' => $id]);
+
+    $item = $statement->fetch();
+    return is_array($item) ? $item : null;
+}
+
+function fetch_lead_by_id_for_update(string $tableName, int $id): ?array
+{
+    $statement = db()->prepare(
+        'SELECT TOP 1
+            ' . lead_select_columns() . '
+         FROM ' . quote_identifier($tableName) . ' WITH (UPDLOCK, HOLDLOCK)
+         WHERE id = :id'
+    );
+    $statement->execute(['id' => $id]);
+
+    $item = $statement->fetch();
+    return is_array($item) ? $item : null;
+}
+
+function build_lead_schedule_range(string $travelDate, string $travelTime, int $durationHours): array
+{
+    $timezone = new DateTimeZone('America/Sao_Paulo');
+    $start = DateTimeImmutable::createFromFormat('Y-m-d H:i', $travelDate . ' ' . $travelTime, $timezone);
+
+    if (!$start instanceof DateTimeImmutable) {
+        throw new RuntimeException('Nao foi possivel interpretar a data e hora da solicitacao.', 422);
+    }
+
+    $minutes = max($durationHours, 1) * 60;
+    $end = $start->modify('+' . $minutes . ' minutes');
+
+    return [$start, $end];
+}
+
+function validate_driver_schedule_conflict(
+    string $tableName,
+    int $leadId,
+    string $driverEmail,
+    string $travelDate,
+    string $travelTime,
+    int $durationHours
+): void {
+    [$requestedStart, $requestedEnd] = build_lead_schedule_range($travelDate, $travelTime, $durationHours);
+    $statement = db()->prepare(
+        'SELECT
+            l.id,
+            l.nome,
+            l.data_viagem,
+            l.hora_inicio,
+            l.plano_nome,
+            ISNULL(l.horas_previstas, 1) AS horas_previstas
+         FROM ' . quote_identifier($tableName) . ' AS l
+         WHERE l.motorista_email = :motorista_email
+           AND l.data_viagem = :data_viagem
+           AND l.id <> :id
+           AND l.status_atendimento IN (\'Em atendimento\', \'Em servico\')'
+    );
+    $statement->execute([
+        'motorista_email' => $driverEmail,
+        'data_viagem' => $travelDate,
+        'id' => $leadId,
+    ]);
+
+    foreach ($statement->fetchAll() as $item) {
+        $existingTime = normalize_time_value((string) ($item['hora_inicio'] ?? ''));
+
+        if ($existingTime === '') {
+            continue;
+        }
+
+        $existingHours = max((int) ($item['horas_previstas'] ?? 0), 1);
+        [$existingStart, $existingEnd] = build_lead_schedule_range(
+            (string) ($item['data_viagem'] ?? ''),
+            $existingTime,
+            $existingHours
+        );
+
+        if ($requestedStart < $existingEnd && $existingStart < $requestedEnd) {
+            throw new RuntimeException(
+                'Esse motorista ja possui atendimento em conflito com a solicitacao #' . (int) ($item['id'] ?? 0) .
+                ' as ' . $existingTime . ' do dia ' . (string) ($item['data_viagem'] ?? '') . '.',
+                409
+            );
+        }
+    }
+}
+
 function save_lead(array $payload): array
 {
     $tableName = leads_table_name();
@@ -517,29 +771,46 @@ function save_lead(array $payload): array
     $origin = trim((string) ($payload['origin'] ?? ''));
     $destination = trim((string) ($payload['destination'] ?? ''));
     $travelDate = trim((string) ($payload['travelDate'] ?? ''));
+    $travelTime = normalize_time_value((string) ($payload['travelTime'] ?? ''));
     $notes = trim((string) ($payload['notes'] ?? ''));
     $planSlug = strtolower(trim((string) ($payload['planSlug'] ?? 'standard')));
+    $requesterEmail = strtolower(trim((string) ($payload['requesterEmail'] ?? '')));
+    $requesterName = trim((string) ($payload['requesterName'] ?? ''));
+    $requesterAuthProvider = trim((string) ($payload['requesterAuthProvider'] ?? ''));
 
-    if ($name === '' || $phone === '' || $origin === '' || $destination === '' || $travelDate === '') {
-        json_response(['ok' => false, 'error' => 'Preencha nome, telefone, origem, destino e data da viagem.'], 422);
+    if ($name === '' || $phone === '' || $origin === '' || $destination === '' || $travelDate === '' || $travelTime === '') {
+        json_response(['ok' => false, 'error' => 'Preencha nome, telefone, origem, destino, data e hora da viagem.'], 422);
     }
 
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $travelDate)) {
         json_response(['ok' => false, 'error' => 'Informe a data da viagem em formato valido.'], 422);
     }
 
+    if ($travelTime === '') {
+        json_response(['ok' => false, 'error' => 'Informe a hora da viagem em formato valido.'], 422);
+    }
+
     if (!isset($serviceMap[$planSlug])) {
         json_response(['ok' => false, 'error' => 'Plano selecionado nao foi encontrado.'], 422);
     }
 
+    if ($requesterEmail !== '' && !filter_var($requesterEmail, FILTER_VALIDATE_EMAIL)) {
+        json_response(['ok' => false, 'error' => 'Email do solicitante invalido.'], 422);
+    }
+
+    if ($requesterAuthProvider !== '' && !in_array($requesterAuthProvider, ['email', 'google'], true)) {
+        json_response(['ok' => false, 'error' => 'Provedor de autenticacao do solicitante invalido.'], 422);
+    }
+
     $service = $serviceMap[$planSlug];
     $planName = (string) ($service['nome'] ?? 'Plano');
+    $plannedHours = max((int) ($service['horas_disponiveis'] ?? 0), 1);
 
     $statement = db()->prepare(
         'INSERT INTO ' . quote_identifier($tableName) . ' (
-            nome, telefone, origem, destino, data_viagem, observacoes, plano_slug, plano_nome, status_atendimento, created_at, updated_at
+            nome, telefone, origem, destino, data_viagem, hora_inicio, horas_previstas, observacoes, plano_slug, plano_nome, solicitante_email, solicitante_nome, solicitante_auth_provider, status_atendimento, created_at, updated_at
         ) VALUES (
-            :nome, :telefone, :origem, :destino, :data_viagem, :observacoes, :plano_slug, :plano_nome, :status_atendimento, SYSUTCDATETIME(), SYSUTCDATETIME()
+            :nome, :telefone, :origem, :destino, :data_viagem, :hora_inicio, :horas_previstas, :observacoes, :plano_slug, :plano_nome, :solicitante_email, :solicitante_nome, :solicitante_auth_provider, :status_atendimento, SYSUTCDATETIME(), SYSUTCDATETIME()
         )'
     );
 
@@ -549,25 +820,20 @@ function save_lead(array $payload): array
         'origem' => $origin,
         'destino' => $destination,
         'data_viagem' => $travelDate,
+        'hora_inicio' => $travelTime,
+        'horas_previstas' => $plannedHours,
         'observacoes' => $notes !== '' ? $notes : null,
         'plano_slug' => $planSlug,
         'plano_nome' => $planName,
+        'solicitante_email' => $requesterEmail !== '' ? $requesterEmail : null,
+        'solicitante_nome' => $requesterName !== '' ? $requesterName : null,
+        'solicitante_auth_provider' => $requesterAuthProvider !== '' ? $requesterAuthProvider : null,
         'status_atendimento' => 'Novo',
     ]);
 
     $item = db()->query(
         'SELECT TOP 1
-            id,
-            nome,
-            telefone,
-            origem,
-            destino,
-            data_viagem,
-            observacoes,
-            plano_slug,
-            plano_nome,
-            status_atendimento,
-            created_at
+            ' . lead_select_columns() . '
          FROM ' . quote_identifier($tableName) . '
          ORDER BY id DESC'
     )->fetch();
@@ -585,7 +851,9 @@ function fetch_leads(): array
     $status = trim((string) ($_GET['status'] ?? ''));
     $startDate = trim((string) ($_GET['start_date'] ?? ''));
     $endDate = trim((string) ($_GET['end_date'] ?? ''));
-    $allowedStatuses = ['Novo', 'Em atendimento', 'Confirmado'];
+    $requesterEmail = strtolower(trim((string) ($_GET['requester_email'] ?? '')));
+    $driverEmail = strtolower(trim((string) ($_GET['driver_email'] ?? '')));
+    $allowedStatuses = ['Novo', 'Em atendimento', 'Em servico', 'Finalizado'];
     $conditions = [];
     $params = [];
 
@@ -616,25 +884,33 @@ function fetch_leads(): array
         $params['end_date'] = $endDate;
     }
 
+    if ($requesterEmail !== '') {
+        if (!filter_var($requesterEmail, FILTER_VALIDATE_EMAIL)) {
+            json_response(['ok' => false, 'error' => 'Email do solicitante invalido.'], 422);
+        }
+
+        $conditions[] = 'solicitante_email = :solicitante_email';
+        $params['solicitante_email'] = $requesterEmail;
+    }
+
+    if ($driverEmail !== '') {
+        if (!filter_var($driverEmail, FILTER_VALIDATE_EMAIL)) {
+            json_response(['ok' => false, 'error' => 'Email do motorista invalido.'], 422);
+        }
+
+        $conditions[] = 'motorista_email = :motorista_email';
+        $params['motorista_email'] = $driverEmail;
+    }
+
     $sql = 'SELECT
-            id,
-            nome,
-            telefone,
-            origem,
-            destino,
-            data_viagem,
-            observacoes,
-            plano_slug,
-            plano_nome,
-            status_atendimento,
-            created_at
+            ' . lead_select_columns() . '
          FROM ' . quote_identifier($tableName);
 
     if ($conditions !== []) {
         $sql .= ' WHERE ' . implode(' AND ', $conditions);
     }
 
-    $sql .= ' ORDER BY created_at DESC, id DESC';
+    $sql .= ' ORDER BY data_viagem ASC, hora_inicio ASC, created_at DESC, id DESC';
 
     $statement = db()->prepare($sql);
     $statement->execute($params);
@@ -642,12 +918,96 @@ function fetch_leads(): array
     return $statement->fetchAll();
 }
 
+function take_lead_for_driver(array $payload): array
+{
+    $tableName = leads_table_name();
+    $id = (int) ($payload['id'] ?? 0);
+    $driverEmail = strtolower(trim((string) ($payload['driverEmail'] ?? '')));
+    $driverName = trim((string) ($payload['driverName'] ?? ''));
+
+    if ($id <= 0) {
+        json_response(['ok' => false, 'error' => 'Solicitacao invalida.'], 422);
+    }
+
+    if ($driverEmail === '' || !filter_var($driverEmail, FILTER_VALIDATE_EMAIL)) {
+        json_response(['ok' => false, 'error' => 'Email do motorista invalido.'], 422);
+    }
+
+    if ($driverName === '') {
+        json_response(['ok' => false, 'error' => 'Nome do motorista obrigatorio.'], 422);
+    }
+
+    $connection = db();
+
+    try {
+        $connection->beginTransaction();
+        $lead = fetch_lead_by_id_for_update($tableName, $id);
+
+        if ($lead === null) {
+            throw new RuntimeException('Solicitacao nao encontrada.', 404);
+        }
+
+        $currentDriverEmail = strtolower(trim((string) ($lead['motorista_email'] ?? '')));
+        $travelDate = trim((string) ($lead['data_viagem'] ?? ''));
+        $travelTime = normalize_time_value((string) ($lead['hora_inicio'] ?? ''));
+        if ($currentDriverEmail !== '' && $currentDriverEmail !== $driverEmail) {
+            throw new RuntimeException('Essa solicitacao ja foi assumida por outro motorista.', 409);
+        }
+
+        if ($travelDate === '' || $travelTime === '') {
+            throw new RuntimeException('A solicitacao nao possui data e hora validas para roteirizacao.', 422);
+        }
+
+        $durationHours = max((int) ($lead['horas_previstas'] ?? 0), 1);
+        validate_driver_schedule_conflict($tableName, $id, $driverEmail, $travelDate, $travelTime, $durationHours);
+
+        $statement = $connection->prepare(
+            'UPDATE ' . quote_identifier($tableName) . '
+             SET motorista_email = :motorista_email,
+                 motorista_nome = :motorista_nome,
+                 capturado_em = ISNULL(capturado_em, SYSUTCDATETIME()),
+                 iniciado_em = NULL,
+                 finalizado_em = NULL,
+                 status_atendimento = :status_atendimento,
+                 updated_at = SYSUTCDATETIME()
+             WHERE id = :id'
+        );
+        $statement->execute([
+            'motorista_email' => $driverEmail,
+            'motorista_nome' => $driverName,
+            'status_atendimento' => 'Em atendimento',
+            'id' => $id,
+        ]);
+
+        $connection->commit();
+    } catch (Throwable $exception) {
+        if ($connection->inTransaction()) {
+            $connection->rollBack();
+        }
+
+        if ($exception instanceof RuntimeException && $exception->getCode() >= 400) {
+            json_response(['ok' => false, 'error' => $exception->getMessage()], $exception->getCode());
+        }
+
+        throw $exception;
+    }
+
+    $item = fetch_lead_by_id($tableName, $id);
+
+    if ($item === null) {
+        json_response(['ok' => false, 'error' => 'Solicitacao nao encontrada apos captura.'], 404);
+    }
+
+    return $item;
+}
+
 function update_lead_status(array $payload): array
 {
     $tableName = leads_table_name();
     $id = (int) ($payload['id'] ?? 0);
     $status = trim((string) ($payload['status'] ?? ''));
-    $allowedStatuses = ['Novo', 'Em atendimento', 'Confirmado'];
+    $actorEmail = strtolower(trim((string) ($payload['actorEmail'] ?? '')));
+    $allowedStatuses = ['Novo', 'Em atendimento', 'Em servico', 'Finalizado'];
 
     if ($id <= 0) {
         json_response(['ok' => false, 'error' => 'Solicitacao invalida.'], 422);
@@ -657,40 +1017,132 @@ function update_lead_status(array $payload): array
         json_response(['ok' => false, 'error' => 'Status invalido para a solicitacao.'], 422);
     }
 
-    $statement = db()->prepare(
-        'UPDATE ' . quote_identifier($tableName) . '
-         SET status_atendimento = :status_atendimento,
-             updated_at = SYSUTCDATETIME()
-         WHERE id = :id'
-    );
-    $statement->execute([
-        'status_atendimento' => $status,
-        'id' => $id,
-    ]);
+    $item = fetch_lead_by_id($tableName, $id);
 
-    $fetchStatement = db()->prepare(
-        'SELECT TOP 1
-            id,
-            nome,
-            telefone,
-            origem,
-            destino,
-            data_viagem,
-            observacoes,
-            plano_slug,
-            plano_nome,
-            status_atendimento,
-            created_at
-         FROM ' . quote_identifier($tableName) . '
-         WHERE id = :id'
-    );
-    $fetchStatement->execute(['id' => $id]);
-
-    $item = $fetchStatement->fetch();
-
-    if (!$item) {
+    if ($item === null) {
         json_response(['ok' => false, 'error' => 'Solicitacao nao encontrada.'], 404);
     }
 
-    return $item;
+    $currentDriverEmail = strtolower(trim((string) ($item['motorista_email'] ?? '')));
+    $currentStatus = trim((string) ($item['status_atendimento'] ?? 'Novo'));
+
+    if ($currentDriverEmail === '' && $status !== 'Novo') {
+        json_response([
+            'ok' => false,
+            'error' => 'A solicitacao precisa ser assumida por um motorista antes de iniciar o atendimento.',
+        ], 422);
+    }
+
+    if ($currentDriverEmail !== '') {
+        if ($actorEmail === '' || !filter_var($actorEmail, FILTER_VALIDATE_EMAIL)) {
+            json_response(['ok' => false, 'error' => 'Email do motorista responsavel invalido.'], 422);
+        }
+
+        if ($actorEmail !== $currentDriverEmail) {
+            json_response([
+                'ok' => false,
+                'error' => 'Apenas o motorista responsavel pode alterar o status desta solicitacao.',
+            ], 403);
+        }
+
+        if ($currentStatus !== 'Novo' && $status === 'Novo') {
+            json_response([
+                'ok' => false,
+                'error' => 'Uma solicitacao assumida nao pode voltar para o status Novo.',
+            ], 422);
+        }
+    }
+
+    $allowedTransitions = [
+        'Novo' => ['Novo'],
+        'Em atendimento' => ['Em servico'],
+        'Em servico' => ['Finalizado'],
+        'Finalizado' => ['Finalizado'],
+    ];
+
+    $allowedTargets = $allowedTransitions[$currentStatus] ?? [];
+
+    if ($currentStatus !== $status && !in_array($status, $allowedTargets, true)) {
+        json_response([
+            'ok' => false,
+            'error' => 'Transicao de status invalida para esta solicitacao.',
+        ], 422);
+    }
+
+    $setParts = [
+        'status_atendimento = :status_atendimento',
+        'updated_at = SYSUTCDATETIME()',
+    ];
+    $params = [
+        'status_atendimento' => $status,
+        'id' => $id,
+    ];
+
+    if ($currentStatus !== $status && $status === 'Em servico') {
+        $setParts[] = 'iniciado_em = ISNULL(iniciado_em, SYSUTCDATETIME())';
+    }
+
+    if ($currentStatus !== $status && $status === 'Finalizado') {
+        $setParts[] = 'finalizado_em = ISNULL(finalizado_em, SYSUTCDATETIME())';
+    }
+
+    $statement = db()->prepare(
+        'UPDATE ' . quote_identifier($tableName) . '
+         SET ' . implode(', ', $setParts) . '
+         WHERE id = :id'
+    );
+    $statement->execute($params);
+
+    $updatedLead = fetch_lead_by_id($tableName, $id);
+
+    if ($updatedLead === null) {
+        json_response(['ok' => false, 'error' => 'Solicitacao nao encontrada.'], 404);
+    }
+
+    return $updatedLead;
+}
+
+function fetch_lead_status_summary(): array
+{
+    $tableName = leads_table_name();
+    $statement = db()->query(
+        'SELECT status_atendimento, COUNT(*) AS total
+         FROM ' . quote_identifier($tableName) . '
+         GROUP BY status_atendimento'
+    );
+
+    $summary = [
+        'total' => 0,
+        'novo' => 0,
+        'em_atendimento' => 0,
+        'em_servico' => 0,
+        'finalizado' => 0,
+    ];
+
+    foreach ($statement->fetchAll() as $item) {
+        $status = trim((string) ($item['status_atendimento'] ?? ''));
+        $total = (int) ($item['total'] ?? 0);
+        $summary['total'] += $total;
+
+        if ($status === 'Novo') {
+            $summary['novo'] = $total;
+            continue;
+        }
+
+        if ($status === 'Em atendimento') {
+            $summary['em_atendimento'] = $total;
+            continue;
+        }
+
+        if ($status === 'Em servico') {
+            $summary['em_servico'] = $total;
+            continue;
+        }
+
+        if ($status === 'Finalizado') {
+            $summary['finalizado'] = $total;
+        }
+    }
+
+    return $summary;
 }

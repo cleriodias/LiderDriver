@@ -155,11 +155,20 @@ function map_lead_item(array $item): array
         'origin' => (string) ($item['origem'] ?? ''),
         'destination' => (string) ($item['destino'] ?? ''),
         'travel_date' => (string) ($item['data_viagem'] ?? ''),
+        'travel_time' => (string) ($item['hora_inicio'] ?? ''),
         'notes' => (string) ($item['observacoes'] ?? ''),
         'plan_slug' => (string) ($item['plano_slug'] ?? ''),
         'plan_name' => (string) ($item['plano_nome'] ?? ''),
         'status' => (string) ($item['status_atendimento'] ?? 'Novo'),
         'created_at' => isset($item['created_at']) ? (string) $item['created_at'] : '',
+        'requester_email' => (string) ($item['solicitante_email'] ?? ''),
+        'requester_name' => (string) ($item['solicitante_nome'] ?? ''),
+        'requester_auth_provider' => (string) ($item['solicitante_auth_provider'] ?? ''),
+        'driver_email' => (string) ($item['motorista_email'] ?? ''),
+        'driver_name' => (string) ($item['motorista_nome'] ?? ''),
+        'captured_at' => isset($item['capturado_em']) ? (string) $item['capturado_em'] : '',
+        'started_at' => isset($item['iniciado_em']) ? (string) $item['iniciado_em'] : '',
+        'finished_at' => isset($item['finalizado_em']) ? (string) $item['finalizado_em'] : '',
     ];
 }
 
@@ -236,6 +245,14 @@ function dispatch_gateway_request(array $payload): void
                 $_GET['end_date'] = (string) $data['endDate'];
             }
 
+            if (isset($data['requesterEmail']) && trim((string) $data['requesterEmail']) !== '') {
+                $_GET['requester_email'] = (string) $data['requesterEmail'];
+            }
+
+            if (isset($data['driverEmail']) && trim((string) $data['driverEmail']) !== '') {
+                $_GET['driver_email'] = (string) $data['driverEmail'];
+            }
+
             try {
                 $items = array_map('map_lead_item', fetch_leads());
             } finally {
@@ -254,6 +271,14 @@ function dispatch_gateway_request(array $payload): void
                 'ok' => true,
                 'item' => map_lead_item($item),
             ], 201);
+
+        case 'ldt':
+            $item = take_lead_for_driver($data);
+
+            json_response([
+                'ok' => true,
+                'item' => map_lead_item($item),
+            ]);
 
         case 'ldu':
             $item = update_lead_status($data);
