@@ -11,6 +11,7 @@ try {
         $item = match ($action) {
             'update_status' => update_lead_status($payload),
             'take_for_driver' => take_lead_for_driver($payload),
+            'cancel' => cancel_lead($payload),
             default => save_lead($payload),
         };
 
@@ -37,8 +38,12 @@ try {
                 'captured_at' => isset($item['capturado_em']) ? (string) $item['capturado_em'] : '',
                 'started_at' => isset($item['iniciado_em']) ? (string) $item['iniciado_em'] : '',
                 'finished_at' => isset($item['finalizado_em']) ? (string) $item['finalizado_em'] : '',
+                'cancelled_at' => isset($item['cancelado_em']) ? (string) $item['cancelado_em'] : '',
+                'cancelled_by_email' => (string) ($item['cancelado_por_email'] ?? ''),
+                'cancelled_by_name' => (string) ($item['cancelado_por_nome'] ?? ''),
+                'cancellation_reason' => (string) ($item['motivo_cancelamento'] ?? ''),
             ],
-        ], $action === 'update_status' || $action === 'take_for_driver' ? 200 : 201);
+        ], $action === 'update_status' || $action === 'take_for_driver' || $action === 'cancel' ? 200 : 201);
     }
 
     $items = array_map(
@@ -63,6 +68,10 @@ try {
             'captured_at' => isset($item['capturado_em']) ? (string) $item['capturado_em'] : '',
             'started_at' => isset($item['iniciado_em']) ? (string) $item['iniciado_em'] : '',
             'finished_at' => isset($item['finalizado_em']) ? (string) $item['finalizado_em'] : '',
+            'cancelled_at' => isset($item['cancelado_em']) ? (string) $item['cancelado_em'] : '',
+            'cancelled_by_email' => (string) ($item['cancelado_por_email'] ?? ''),
+            'cancelled_by_name' => (string) ($item['cancelado_por_nome'] ?? ''),
+            'cancellation_reason' => (string) ($item['motivo_cancelamento'] ?? ''),
         ],
         fetch_leads()
     );

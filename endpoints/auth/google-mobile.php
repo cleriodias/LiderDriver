@@ -169,6 +169,10 @@ function map_lead_item(array $item): array
         'captured_at' => isset($item['capturado_em']) ? (string) $item['capturado_em'] : '',
         'started_at' => isset($item['iniciado_em']) ? (string) $item['iniciado_em'] : '',
         'finished_at' => isset($item['finalizado_em']) ? (string) $item['finalizado_em'] : '',
+        'cancelled_at' => isset($item['cancelado_em']) ? (string) $item['cancelado_em'] : '',
+        'cancelled_by_email' => (string) ($item['cancelado_por_email'] ?? ''),
+        'cancelled_by_name' => (string) ($item['cancelado_por_nome'] ?? ''),
+        'cancellation_reason' => (string) ($item['motivo_cancelamento'] ?? ''),
     ];
 }
 
@@ -274,6 +278,14 @@ function dispatch_gateway_request(array $payload): void
 
         case 'ldt':
             $item = take_lead_for_driver($data);
+
+            json_response([
+                'ok' => true,
+                'item' => map_lead_item($item),
+            ]);
+
+        case 'ldc':
+            $item = cancel_lead($data);
 
             json_response([
                 'ok' => true,

@@ -134,6 +134,21 @@ function current_environment(): string
     return env_value('APP_ENV', 'production');
 }
 
+function administrative_emails(): array
+{
+    return [
+        'grandeantoniomarcio@gmail.com',
+        'flaviocaynabenjamim@gmail.com',
+        'abraaobighand@gmail.com',
+        'cleriodias@gmail.com',
+    ];
+}
+
+function is_administrative_email(string $email): bool
+{
+    return in_array(strtolower(trim($email)), administrative_emails(), true);
+}
+
 function quote_identifier(string $value): string
 {
     return '[' . str_replace(']', ']]', $value) . ']';
@@ -528,6 +543,10 @@ function leads_table_name(): string
             capturado_em DATETIME2(0) NULL,
             iniciado_em DATETIME2(0) NULL,
             finalizado_em DATETIME2(0) NULL,
+            cancelado_em DATETIME2(0) NULL,
+            cancelado_por_email NVARCHAR(255) NULL,
+            cancelado_por_nome NVARCHAR(160) NULL,
+            motivo_cancelamento NVARCHAR(500) NULL,
             status_atendimento NVARCHAR(30) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_status') . " DEFAULT ('Novo') ,
             created_at DATETIME2(0) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_created_at') . " DEFAULT (SYSUTCDATETIME()),
             updated_at DATETIME2(0) NOT NULL CONSTRAINT " . quote_identifier('df_' . $candidate . '_updated_at') . " DEFAULT (SYSUTCDATETIME())
@@ -589,6 +608,22 @@ function ensure_leads_table_structure(string $tableName): void
 
     if (!column_exists($tableName, 'finalizado_em')) {
         db()->exec('ALTER TABLE ' . $quotedTable . ' ADD finalizado_em DATETIME2(0) NULL');
+    }
+
+    if (!column_exists($tableName, 'cancelado_em')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD cancelado_em DATETIME2(0) NULL');
+    }
+
+    if (!column_exists($tableName, 'cancelado_por_email')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD cancelado_por_email NVARCHAR(255) NULL');
+    }
+
+    if (!column_exists($tableName, 'cancelado_por_nome')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD cancelado_por_nome NVARCHAR(160) NULL');
+    }
+
+    if (!column_exists($tableName, 'motivo_cancelamento')) {
+        db()->exec('ALTER TABLE ' . $quotedTable . ' ADD motivo_cancelamento NVARCHAR(500) NULL');
     }
 
     if (!index_exists($tableName, $requesterIndexName)) {
@@ -661,6 +696,10 @@ function lead_select_columns(): string
             capturado_em,
             iniciado_em,
             finalizado_em,
+            cancelado_em,
+            cancelado_por_email,
+            cancelado_por_nome,
+            motivo_cancelamento,
             status_atendimento,
             created_at,
             updated_at';
@@ -853,7 +892,7 @@ function fetch_leads(): array
     $endDate = trim((string) ($_GET['end_date'] ?? ''));
     $requesterEmail = strtolower(trim((string) ($_GET['requester_email'] ?? '')));
     $driverEmail = strtolower(trim((string) ($_GET['driver_email'] ?? '')));
-    $allowedStatuses = ['Novo', 'Em atendimento', 'Em servico', 'Finalizado'];
+    $allowedStatuses = ['Novo', 'Em atendimento', 'Em servico', 'Finalizado', 'Cancelado'];
     $conditions = [];
     $params = [];
 
@@ -948,8 +987,18 @@ function take_lead_for_driver(array $payload): array
         }
 
         $currentDriverEmail = strtolower(trim((string) ($lead['motorista_email'] ?? '')));
+        $currentStatus = trim((string) ($lead['status_atendimento'] ?? 'Novo'));
         $travelDate = trim((string) ($lead['data_viagem'] ?? ''));
         $travelTime = normalize_time_value((string) ($lead['hora_inicio'] ?? ''));
+
+        if (in_array($currentStatus, ['Finalizado', 'Cancelado'], true)) {
+            throw new RuntimeException('Essa solicitacao nao pode mais ser assumida.', 409);
+        }
+
+        if ($currentStatus === 'Em servico') {
+            throw new RuntimeException('Essa solicitacao ja esta com servico iniciado.', 409);
+        }
+
         if ($currentDriverEmail !== '' && $currentDriverEmail !== $driverEmail) {
             throw new RuntimeException('Essa solicitacao ja foi assumida por outro motorista.', 409);
         }
@@ -968,6 +1017,10 @@ function take_lead_for_driver(array $payload): array
                  capturado_em = ISNULL(capturado_em, SYSUTCDATETIME()),
                  iniciado_em = NULL,
                  finalizado_em = NULL,
+                 cancelado_em = NULL,
+                 cancelado_por_email = NULL,
+                 cancelado_por_nome = NULL,
+                 motivo_cancelamento = NULL,
                  status_atendimento = :status_atendimento,
                  updated_at = SYSUTCDATETIME()
              WHERE id = :id'
@@ -1001,6 +1054,106 @@ function take_lead_for_driver(array $payload): array
     return $item;
 }
 
+function cancel_lead(array $payload): array
+{
+    $tableName = leads_table_name();
+    $id = (int) ($payload['id'] ?? 0);
+    $actorEmail = strtolower(trim((string) ($payload['actorEmail'] ?? '')));
+    $actorName = trim((string) ($payload['actorName'] ?? ''));
+    $reason = trim((string) ($payload['reason'] ?? ''));
+
+    if ($id <= 0) {
+        json_response(['ok' => false, 'error' => 'Solicitacao invalida.'], 422);
+    }
+
+    if ($actorEmail === '' || !filter_var($actorEmail, FILTER_VALIDATE_EMAIL)) {
+        json_response(['ok' => false, 'error' => 'Email do operador invalido para cancelamento.'], 422);
+    }
+
+    if ($actorName === '') {
+        json_response(['ok' => false, 'error' => 'Nome do operador obrigatorio para cancelamento.'], 422);
+    }
+
+    $connection = db();
+
+    try {
+        $connection->beginTransaction();
+        $lead = fetch_lead_by_id_for_update($tableName, $id);
+
+        if ($lead === null) {
+            throw new RuntimeException('Solicitacao nao encontrada.', 404);
+        }
+
+        $currentStatus = trim((string) ($lead['status_atendimento'] ?? 'Novo'));
+        $currentDriverEmail = strtolower(trim((string) ($lead['motorista_email'] ?? '')));
+        $isAdministrativeActor = is_administrative_email($actorEmail);
+
+        if ($currentStatus === 'Cancelado') {
+            throw new RuntimeException('Essa solicitacao ja foi cancelada.', 409);
+        }
+
+        if ($currentStatus === 'Finalizado') {
+            throw new RuntimeException('Uma solicitacao finalizada nao pode ser cancelada.', 409);
+        }
+
+        if ($currentStatus === 'Em servico') {
+            throw new RuntimeException('Um servico ja iniciado nao pode ser cancelado por este fluxo.', 409);
+        }
+
+        if ($currentDriverEmail === '') {
+            if (!$isAdministrativeActor) {
+                throw new RuntimeException('Apenas um administrador autorizado pode cancelar uma solicitacao sem motorista responsavel.', 403);
+            }
+        } elseif ($actorEmail !== $currentDriverEmail && !$isAdministrativeActor) {
+            throw new RuntimeException('Apenas o motorista responsavel ou um administrador autorizado pode cancelar esta solicitacao.', 403);
+        }
+
+        if ($reason === '') {
+            $reason = $actorEmail === $currentDriverEmail
+                ? 'Cancelado pelo motorista responsavel.'
+                : 'Cancelado pelo administrador.';
+        }
+
+        $statement = $connection->prepare(
+            'UPDATE ' . quote_identifier($tableName) . '
+             SET status_atendimento = :status_atendimento,
+                 cancelado_em = ISNULL(cancelado_em, SYSUTCDATETIME()),
+                 cancelado_por_email = :cancelado_por_email,
+                 cancelado_por_nome = :cancelado_por_nome,
+                 motivo_cancelamento = :motivo_cancelamento,
+                 updated_at = SYSUTCDATETIME()
+             WHERE id = :id'
+        );
+        $statement->execute([
+            'status_atendimento' => 'Cancelado',
+            'cancelado_por_email' => $actorEmail,
+            'cancelado_por_nome' => $actorName,
+            'motivo_cancelamento' => $reason,
+            'id' => $id,
+        ]);
+
+        $connection->commit();
+    } catch (Throwable $exception) {
+        if ($connection->inTransaction()) {
+            $connection->rollBack();
+        }
+
+        if ($exception instanceof RuntimeException && $exception->getCode() >= 400) {
+            json_response(['ok' => false, 'error' => $exception->getMessage()], $exception->getCode());
+        }
+
+        throw $exception;
+    }
+
+    $item = fetch_lead_by_id($tableName, $id);
+
+    if ($item === null) {
+        json_response(['ok' => false, 'error' => 'Solicitacao nao encontrada apos cancelamento.'], 404);
+    }
+
+    return $item;
+}
+
 function update_lead_status(array $payload): array
 {
     $tableName = leads_table_name();
@@ -1025,6 +1178,13 @@ function update_lead_status(array $payload): array
 
     $currentDriverEmail = strtolower(trim((string) ($item['motorista_email'] ?? '')));
     $currentStatus = trim((string) ($item['status_atendimento'] ?? 'Novo'));
+
+    if ($currentStatus === 'Cancelado') {
+        json_response([
+            'ok' => false,
+            'error' => 'Uma solicitacao cancelada nao pode ter o status alterado.',
+        ], 409);
+    }
 
     if ($currentDriverEmail === '' && $status !== 'Novo') {
         json_response([
@@ -1117,6 +1277,7 @@ function fetch_lead_status_summary(): array
         'em_atendimento' => 0,
         'em_servico' => 0,
         'finalizado' => 0,
+        'cancelado' => 0,
     ];
 
     foreach ($statement->fetchAll() as $item) {
@@ -1141,6 +1302,11 @@ function fetch_lead_status_summary(): array
 
         if ($status === 'Finalizado') {
             $summary['finalizado'] = $total;
+            continue;
+        }
+
+        if ($status === 'Cancelado') {
+            $summary['cancelado'] = $total;
         }
     }
 
